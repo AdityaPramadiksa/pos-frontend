@@ -1,0 +1,35 @@
+name: pos_babi_guling
+description: "A new Flutter project for Babi Guling POS System."
+publish_to: "none"
+
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.1.0
+  shared_preferences: ^2.2.0
+
+  # 🔥 INI KITA GANTI: Plugin lama dibuang, pakai yang baru yang anti-rewel 🔥
+  print_bluetooth_thermal: ^1.0.8
+  esc_pos_utils_plus: any
+
+  intl: ^0.18.1
+  provider: ^6.0.5
+  image_picker: ^1.2.1
+  permission_handler: ^12.0.1
+  image: ^4.8.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/mengede.png
