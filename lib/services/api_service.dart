@@ -22,7 +22,7 @@ class ApiService {
   // 1. Alamat server bawaan. Bisa diganti dari halaman login tanpa build ulang.
   //    Boleh berupa IP laptop di WiFi warung ("192.168.1.10", port 8000) atau
   //    alamat hosting ("https://pos.namawarung.com").
-  static const String defaultIpAddress = "192.168.18.8";
+  static const String defaultIpAddress = "pos-begul.my.id";
   static const String _serverPrefKey = 'server_address';
   static String ipAddress = defaultIpAddress;
 
