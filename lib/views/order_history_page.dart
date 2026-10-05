@@ -6,6 +6,7 @@ import '../services/api_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
 import '../utils/responsive.dart';
+import '../widgets/ui.dart';
 
 class OrderHistoryPage extends StatefulWidget {
   const OrderHistoryPage({super.key});
@@ -19,6 +20,12 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
   List<dynamic> _orders = [];
   bool _isLoading = true;
 
+  static const Map<String, String> _typeLabels = {
+    'dine_in': 'Makan di sini',
+    'to_go': 'Bungkus',
+    'delivery': 'Ojol',
+  };
+
   @override
   void initState() {
     super.initState();
@@ -27,49 +34,105 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
 
   Future<void> _fetchHistory() async {
     if (!mounted) return;
-    setState(() => _isLoading = true);
+    setState(() => _isLoading = _orders.isEmpty);
+    final data = await _apiService.getOrderHistory();
+    if (!mounted) return;
+    setState(() {
+      _orders = data;
+      _isLoading = false;
+    });
+  }
 
-    try {
-      final data = await _apiService.getOrderHistory();
-      if (!mounted) return;
+  String _time(dynamic order) {
+    final DateTime? t =
+        DateTime.tryParse(order['created_at']?.toString() ?? '')?.toLocal();
+    return t == null ? '' : DateFormat('HH:mm').format(t);
+  }
 
-      setState(() {
-        _orders = data;
-        _isLoading = false;
-      });
-    } catch (e) {
-      if (mounted) setState(() => _isLoading = false);
-      debugPrint("Error Fetch History: $e");
+  String _typeLabel(dynamic order) {
+    final String type = _typeLabels[order['order_type']] ?? '${order['order_type']}';
+    final String platform = order['delivery_platform']?.toString() ?? '';
+    return platform.isEmpty ? type : "$type · ${platformLabel(platform)}";
+  }
+
+  String _paymentLabel(dynamic order) {
+    final String method = order['payment_method']?.toString() ?? '';
+    if (method.isEmpty) return 'Belum dibayar';
+    if (method == 'delivery') return 'Lewat aplikasi';
+    if (method == 'cash') return 'Tunai';
+    if (method == 'credit') return 'Kredit';
+    return method.toUpperCase();
+  }
+
+  String _customer(dynamic order) {
+    final String name = order['customer_name']?.toString() ?? '';
+    return name.isEmpty || name == 'Pelanggan Umum' ? 'Pelanggan umum' : name;
+  }
+
+  Widget _statusChip(dynamic order) {
+    switch (order['status'].toString().toLowerCase()) {
+      case 'paid':
+        return const StatusChip("Lunas", tone: ChipTone.success);
+      case 'void':
+        return const StatusChip("Dibatalkan", tone: ChipTone.danger);
+      default:
+        return const StatusChip("Belum dibayar", tone: ChipTone.warning);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Provider.of<ThemeProvider>(context);
-
     final bool mobile = isMobile(context);
+    final int paidCount =
+        _orders.where((o) => o['status'] == 'paid').length;
 
     return Scaffold(
       backgroundColor: theme.backgroundColor,
       body: Padding(
-        padding: EdgeInsets.all(mobile ? 16 : 24),
+        padding: EdgeInsets.fromLTRB(
+            mobile ? 16 : 32, mobile ? 16 : 28, mobile ? 16 : 32, 0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _buildHeader(theme),
+            PageHeader(
+              title: "Riwayat pesanan",
+              subtitle:
+                  "Hari ini, ${DateFormat('d MMMM yyyy', 'id').format(DateTime.now())} · $paidCount lunas dari ${_orders.length} pesanan",
+              compact: mobile,
+              actions: [
+                IconButton(
+                  tooltip: "Muat ulang",
+                  onPressed: _fetchHistory,
+                  icon: Icon(Icons.refresh, color: theme.textColor),
+                ),
+              ],
+            ),
             SizedBox(height: mobile ? 16 : 24),
             Expanded(
               child: _isLoading
-                  ? Center(
-                      child: CircularProgressIndicator(
-                        color: theme.primaryColor,
-                      ),
-                    )
-                  : _orders.isEmpty
-                      ? _buildEmptyState(theme)
-                      : mobile
-                          ? _buildOrderList(theme)
-                          : _buildOrderTable(theme),
+                  ? const Center(child: CircularProgressIndicator())
+                  : RefreshIndicator(
+                      onRefresh: _fetchHistory,
+                      color: theme.primaryColor,
+                      child: _orders.isEmpty
+                          ? ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              children: [
+                                const SizedBox(height: 80),
+                                Icon(Icons.history,
+                                    size: 48, color: theme.placeholderIconColor),
+                                const SizedBox(height: 12),
+                                Text("Belum ada pesanan hari ini.",
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                        color: theme.secondaryTextColor)),
+                              ],
+                            )
+                          : (mobile
+                              ? _buildOrderList(theme)
+                              : _buildOrderTable(theme)),
+                    ),
             ),
           ],
         ),
@@ -77,443 +140,246 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
     );
   }
 
-  // --- VERSI HP: daftar kartu, tap untuk detail ---
-  Widget _buildOrderList(ThemeProvider theme) {
-    return RefreshIndicator(
-      onRefresh: _fetchHistory,
-      color: theme.primaryColor,
-      child: ListView.separated(
-        physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: _orders.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 10),
-        itemBuilder: (context, index) {
-          final order = _orders[index];
-          final bool isVoid =
-              order['status'].toString().toLowerCase() == 'void';
-          final String platform = order['delivery_platform']?.toString() ?? "";
-          final String payment =
-              order['payment_method']?.toString().toUpperCase() ?? "BELUM BAYAR";
-          final DateTime? time =
-              DateTime.tryParse(order['created_at']?.toString() ?? '')
-                  ?.toLocal();
+  // --- Tablet: tabel ---
+  Widget _buildOrderTable(ThemeProvider theme) {
+    TextStyle head = TextStyle(
+        color: theme.secondaryTextColor,
+        fontSize: 12,
+        fontWeight: FontWeight.w500);
 
-          return Material(
-            color: theme.cardColor,
-            borderRadius: BorderRadius.circular(14),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(14),
-              onTap: () => _showOrderDetails(order, theme),
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: theme.borderColor),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 24),
+      children: [
+        Panel(
+          padding: EdgeInsets.zero,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            order['receipt_number'] ?? '-',
-                            style: _cellStyle(isVoid, theme.textColor,
-                                bold: true, size: 13),
-                          ),
-                        ),
-                        _buildStatusBadge(order['status'].toString()),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      "${time == null ? '' : DateFormat('HH:mm').format(time)}  •  ${order['customer_name'] ?? '-'}",
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          color: theme.secondaryTextColor, fontSize: 12),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Wrap(
-                            spacing: 6,
-                            runSpacing: 4,
-                            crossAxisAlignment: WrapCrossAlignment.center,
-                            children: [
-                              Text(
-                                order['order_type']
-                                    .toString()
-                                    .replaceAll('_', ' ')
-                                    .toUpperCase(),
-                                style: _cellStyle(
-                                    isVoid, theme.secondaryTextColor,
-                                    size: 11),
-                              ),
-                              if (platform.isNotEmpty)
-                                _buildPlatformBadge(platform),
-                              Text(
-                                payment,
-                                style: _cellStyle(isVoid, theme.primaryColor,
-                                    size: 11, bold: true),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Text(
-                          rupiah(order['total_price']),
-                          style: _cellStyle(isVoid, theme.textColor,
-                              bold: true, size: 16),
-                        ),
-                      ],
-                    ),
+                    SizedBox(width: 70, child: Text("Jam", style: head)),
+                    Expanded(flex: 3, child: Text("No. struk", style: head)),
+                    Expanded(flex: 3, child: Text("Pelanggan", style: head)),
+                    Expanded(flex: 3, child: Text("Jenis", style: head)),
+                    Expanded(flex: 2, child: Text("Cara bayar", style: head)),
+                    Expanded(
+                        flex: 2,
+                        child: Text("Total",
+                            style: head, textAlign: TextAlign.right)),
+                    const SizedBox(width: 20),
+                    SizedBox(width: 118, child: Text("Status", style: head)),
                   ],
                 ),
               ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildHeader(ThemeProvider theme) {
-    final bool mobile = isMobile(context);
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "Order History",
-                style: TextStyle(
-                  color: theme.textColor,
-                  fontSize: mobile ? 22 : 28,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              Text(
-                mobile
-                    ? "Transaksi hari ini • ${_orders.length} order"
-                    : "Daftar transaksi hari ini (${DateFormat('dd MMM yyyy').format(DateTime.now())})",
-                style: TextStyle(
-                    color: theme.secondaryTextColor,
-                    fontSize: mobile ? 13 : 14),
-              ),
+              for (final order in _orders) _tableRow(order, theme),
             ],
-          ),
-        ),
-        if (mobile)
-          IconButton(
-            tooltip: "Refresh",
-            onPressed: _fetchHistory,
-            icon: Icon(Icons.refresh, color: theme.textColor),
-          )
-        else
-        ElevatedButton.icon(
-          onPressed: _fetchHistory,
-          icon: const Icon(Icons.refresh, size: 20),
-          label: const Text("Refresh"),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: theme.cardColor,
-            foregroundColor: theme.primaryColor,
-            side: BorderSide(color: theme.borderColor),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
           ),
         ),
       ],
     );
   }
 
-  Widget _buildOrderTable(ThemeProvider theme) {
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: theme.cardColor,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: theme.borderColor),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(16),
-        child: SingleChildScrollView(
-          child: DataTable(
-            showCheckboxColumn: false,
-            headingRowColor: WidgetStateProperty.all(
-              theme.backgroundColor.withOpacity(0.5),
-            ),
-            columns: [
-              _col("Invoice", theme),
-              _col("Customer", theme),
-              _col("Total", theme),
-              _col("Type / Payment", theme), // FIX: Ubah judul header
-              _col("Status", theme),
-              _col("Action", theme),
-            ],
-            rows: _orders.map((order) {
-              bool isVoid = order['status'].toString().toLowerCase() == 'void';
-              String type = order['order_type']
-                  .toString()
-                  .replaceAll('_', ' ')
-                  .toUpperCase();
-              String payment =
-                  order['payment_method']?.toString().toUpperCase() ??
-                      "N/A"; // Data Payment
-              String platform = order['delivery_platform']?.toString() ?? "";
-
-              return DataRow(
-                onSelectChanged: (_) => _showOrderDetails(order, theme),
-                cells: [
-                  DataCell(
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          order['receipt_number'],
-                          style: _cellStyle(isVoid, Colors.white),
-                        ),
-                        Text(
-                          DateFormat('HH:mm').format(
-                            DateTime.parse(order['created_at']).toLocal(),
-                          ),
-                          style: TextStyle(color: Colors.grey, fontSize: 10),
-                        ),
-                      ],
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      order['customer_name'] ?? "-",
-                      style: _cellStyle(isVoid, theme.secondaryTextColor),
-                    ),
-                  ),
-                  DataCell(
-                    Text(
-                      rupiah(order['total_price']),
-                      style: _cellStyle(isVoid, theme.textColor, bold: true),
-                    ),
-                  ),
-                  DataCell(
-                    Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // Baris 1: Tipe Order (Dine In / To Go / Delivery + Platform)
-                        Row(
-                          children: [
-                            Text(
-                              type,
-                              style: _cellStyle(
-                                isVoid,
-                                theme.secondaryTextColor,
-                                size: 11,
-                              ),
-                            ),
-                            if (platform.isNotEmpty) ...[
-                              const SizedBox(width: 6),
-                              _buildPlatformBadge(platform),
-                            ],
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        // Baris 2: Metode Pembayaran
-                        Row(
-                          children: [
-                            Icon(
-                              Icons.payment,
-                              size: 10,
-                              color: isVoid ? Colors.grey : theme.primaryColor,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              payment,
-                              style: _cellStyle(
-                                isVoid,
-                                theme.primaryColor,
-                                size: 10,
-                                bold: true,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  DataCell(_buildStatusBadge(order['status'])),
-                  DataCell(
-                    IconButton(
-                      icon: Icon(
-                        Icons.receipt_long,
-                        color: isVoid ? Colors.grey : theme.primaryColor,
-                      ),
-                      onPressed: () => _showOrderDetails(order, theme),
-                    ),
-                  ),
-                ],
-              );
-            }).toList(),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPlatformBadge(String platform) {
-    Color color = Colors.green;
-    if (platform == 'shopee') color = Colors.orange;
-    if (platform == 'grab') color = Colors.greenAccent;
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withOpacity(0.5)),
-      ),
-      child: Text(
-        platform.toUpperCase(),
-        style: TextStyle(
-          color: color,
-          fontSize: 9,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
-  }
-
-  TextStyle _cellStyle(
-    bool isVoid,
-    Color color, {
-    bool bold = false,
-    double size = 14,
-  }) {
-    return TextStyle(
-      color: isVoid ? Colors.grey : color,
-      fontSize: size,
-      fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+  Widget _tableRow(dynamic order, ThemeProvider theme) {
+    final bool isVoid = order['status'] == 'void';
+    final TextStyle base = TextStyle(
+      color: isVoid ? theme.faintTextColor : theme.textColor,
+      fontSize: 14,
       decoration: isVoid ? TextDecoration.lineThrough : null,
     );
-  }
-
-  DataColumn _col(String label, ThemeProvider theme) {
-    return DataColumn(
-      label: Text(
-        label,
-        style: TextStyle(color: theme.textColor, fontWeight: FontWeight.bold),
-      ),
-    );
-  }
-
-  Widget _buildStatusBadge(String status) {
-    String s = status.toLowerCase();
-    Color color = s == 'paid'
-        ? Colors.greenAccent
-        : (s == 'void' ? Colors.redAccent : Colors.orangeAccent);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: color.withOpacity(0.5)),
-      ),
-      child: Text(
-        s.toUpperCase(),
-        style: TextStyle(
-          color: color,
-          fontSize: 10,
-          fontWeight: FontWeight.bold,
+    return InkWell(
+      onTap: () => _showOrderDetails(order, theme),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 13),
+        decoration: BoxDecoration(
+          border: Border(top: BorderSide(color: theme.subtleColor)),
+        ),
+        child: Row(
+          children: [
+            SizedBox(
+                width: 70,
+                child: Text(_time(order),
+                    style: base.copyWith(color: theme.secondaryTextColor))),
+            Expanded(
+                flex: 3,
+                child: Text(order['receipt_number'] ?? '-',
+                    style: base.copyWith(fontWeight: FontWeight.w600))),
+            Expanded(
+                flex: 3,
+                child: Text(_customer(order),
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: base)),
+            Expanded(
+                flex: 3,
+                child: Text(_typeLabel(order),
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: base)),
+            Expanded(flex: 2, child: Text(_paymentLabel(order), style: base)),
+            Expanded(
+              flex: 2,
+              child: Text(rupiah(order['total_price']),
+                  textAlign: TextAlign.right,
+                  style: base.copyWith(
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  )),
+            ),
+            const SizedBox(width: 20),
+            SizedBox(
+                width: 118,
+                child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: _statusChip(order))),
+          ],
         ),
       ),
     );
   }
 
-  void _showOrderDetails(dynamic order, ThemeProvider theme) {
-    List<dynamic> items = order['items'] ?? [];
-    bool isVoid = order['status'].toString().toLowerCase() == 'void';
-    String platform = order['delivery_platform']?.toString() ?? "";
-    String payment = order['payment_method']?.toString().toUpperCase() ?? "N/A";
+  // --- HP: daftar kartu ---
+  Widget _buildOrderList(ThemeProvider theme) {
+    return ListView.separated(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 24),
+      itemCount: _orders.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final order = _orders[index];
+        final bool isVoid = order['status'] == 'void';
+        return Material(
+          color: theme.cardColor,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+            side: BorderSide(color: theme.borderColor),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _showOrderDetails(order, theme),
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          order['receipt_number'] ?? '-',
+                          style: TextStyle(
+                            color: isVoid ? theme.faintTextColor : theme.textColor,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13.5,
+                            decoration:
+                                isVoid ? TextDecoration.lineThrough : null,
+                          ),
+                        ),
+                      ),
+                      _statusChip(order),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Text("${_time(order)} · ${_customer(order)}",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: theme.secondaryTextColor, fontSize: 12.5)),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                            "${_typeLabel(order)} · ${_paymentLabel(order)}",
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                color: theme.secondaryTextColor, fontSize: 12.5)),
+                      ),
+                      Text(
+                        rupiah(order['total_price']),
+                        style: TextStyle(
+                          color: isVoid ? theme.faintTextColor : theme.textColor,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 16,
+                          decoration:
+                              isVoid ? TextDecoration.lineThrough : null,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 
-    // 🔥 AMBIL DATA UANG DIBAYAR & KEMBALIAN DARI JSON
-    int amountPaid = int.tryParse(order['amount_paid']?.toString() ?? '0') ?? 0;
-    int changeAmount =
-        int.tryParse(order['change_amount']?.toString() ?? '0') ?? 0;
+  // --- Detail pesanan ---
+  void _showOrderDetails(dynamic order, ThemeProvider theme) {
+    final List<dynamic> items = order['items'] ?? [];
+    final String status = order['status'].toString().toLowerCase();
+    final bool isVoid = status == 'void';
+    final int amountPaid = toInt(order['amount_paid']);
+    final int changeAmount = toInt(order['change_amount']);
+    final bool mobile = isMobile(context);
+
+    Widget info(String label, String value) => Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label,
+                style: TextStyle(color: theme.secondaryTextColor, fontSize: 12)),
+            Text(value,
+                style: TextStyle(
+                    color: theme.textColor, fontWeight: FontWeight.w600)),
+          ],
+        );
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: theme.cardColor,
-        insetPadding: isMobile(context)
+      builder: (dialogContext) => AlertDialog(
+        insetPadding: mobile
             ? const EdgeInsets.symmetric(horizontal: 12, vertical: 24)
             : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
-        contentPadding: isMobile(context)
+        contentPadding: mobile
             ? const EdgeInsets.fromLTRB(16, 12, 16, 8)
-            : null,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+            : const EdgeInsets.fromLTRB(24, 16, 24, 8),
         title: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text(
-              "Detail Pesanan",
-              style: TextStyle(
-                color: theme.textColor,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+            Expanded(child: Text(order['receipt_number'] ?? 'Detail pesanan')),
             IconButton(
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(Icons.close, color: Colors.grey),
+              tooltip: "Tutup",
+              onPressed: () => Navigator.pop(dialogContext),
+              icon: Icon(Icons.close, color: theme.secondaryTextColor),
             ),
           ],
         ),
         content: SizedBox(
-          width: 450,
+          width: 460,
           child: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Wrap: di HP info otomatis turun ke baris berikutnya
                 Wrap(
                   spacing: 28,
-                  runSpacing: 14,
+                  runSpacing: 12,
                   children: [
-                    _infoBlock(
-                        "KASIR", order['user']?['name'] ?? "N/A", theme),
-                    _infoBlock(
-                      "PELANGGAN",
-                      order['customer_name'] ?? "Umum",
-                      theme,
-                    ),
-                    _infoBlock("PEMBAYARAN", payment, theme),
-                    _infoBlock(
-                      "TIPE",
-                      order['order_type'].toString().replaceAll('_', ' ').toUpperCase(),
-                      theme,
-                    ),
-                    if (platform.isNotEmpty)
-                      _infoBlock("PLATFORM", platform.toUpperCase(), theme),
-                    _infoBlock(
-                        "MEJA", order['table_number']?.toString() ?? "-", theme),
+                    info("Kasir", order['user']?['name'] ?? '-'),
+                    info("Pelanggan", _customer(order)),
+                    info("Jenis", _typeLabel(order)),
+                    if ((order['table_number']?.toString() ?? '').isNotEmpty &&
+                        order['table_number'].toString() != '-')
+                      info("Meja", order['table_number'].toString()),
+                    info("Cara bayar", _paymentLabel(order)),
                   ],
                 ),
-                const Divider(height: 32, color: Colors.white10),
-                Text(
-                  "ITEM MENU",
-                  style: TextStyle(
-                    color: theme.textColor,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                ...items.map(
-                  (item) => Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 6),
+                Divider(height: 28, color: theme.borderColor),
+                ...items.map((item) {
+                  final String note = item['note']?.toString() ?? '';
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 5),
                     child: Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -522,114 +388,48 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                "${item['qty']}x ${item['menu']?['name'] ?? 'Menu'}",
-                                style: TextStyle(
-                                  color: theme.secondaryTextColor,
-                                  fontSize: 13,
-                                ),
-                              ),
-                              if (item['note'] != null &&
-                                  item['note'].toString().trim().isNotEmpty)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    top: 4,
-                                    left: 24,
-                                  ),
-                                  child: Text(
-                                    "* ${item['note']}",
-                                    style: const TextStyle(
-                                      color: Colors.orangeAccent,
-                                      fontSize: 11,
-                                      fontStyle: FontStyle.italic,
-                                    ),
-                                  ),
-                                ),
+                                  "${item['qty']}× ${item['menu']?['name'] ?? 'Menu'}",
+                                  style: TextStyle(color: theme.textColor)),
+                              if (note.isNotEmpty)
+                                Text(note,
+                                    style: TextStyle(
+                                        color: theme.warningColor,
+                                        fontSize: 12)),
                             ],
                           ),
                         ),
-                        Text(
-                          rupiah(item['subtotal']),
-                          style: TextStyle(
-                            color: theme.textColor,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 13,
-                          ),
-                        ),
+                        const SizedBox(width: 12),
+                        Text(rupiah(item['subtotal']),
+                            style: TextStyle(
+                                color: theme.textColor,
+                                fontWeight: FontWeight.w500)),
                       ],
                     ),
-                  ),
-                ),
-                const Divider(height: 32, color: Colors.white10),
-                _summaryRow("Subtotal", rupiah(order['subtotal']), theme),
-                _summaryRow(
-                  "Pajak (PB1)",
-                  rupiah(order['tax_amount']),
-                  theme,
-                ),
-                _summaryRow(
-                  "Diskon",
-                  "- ${rupiah(order['discount_amount'])}",
-                  theme,
-                  color: Colors.redAccent,
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      "TOTAL AKHIR",
-                      style: TextStyle(
-                        color: theme.textColor,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    Text(
-                      rupiah(order['total_price']),
-                      style: TextStyle(
-                        color: theme.primaryColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 20,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(
-                    height: 12), // Jarak sedikit sebelum nominal dibayar
-
-                // 🔥 TAMPILAN BARU: DIBAYAR & KEMBALI
-                // Muncul otomatis kalau tipe pembayaran CASH atau kalau uang dibayarnya lebih besar dari 0
-                if (payment == 'CASH' || amountPaid > 0) ...[
-                  _summaryRow("Dibayar", rupiah(amountPaid), theme),
-                  _summaryRow("Kembali", rupiah(changeAmount), theme),
+                  );
+                }),
+                Divider(height: 28, color: theme.borderColor),
+                AmountRow("Subtotal", rupiah(order['subtotal']), fontSize: 13),
+                AmountRow("Pajak (PB1)", rupiah(order['tax_amount']),
+                    fontSize: 13),
+                if (toInt(order['discount_amount']) > 0)
+                  AmountRow("Diskon", "− ${rupiah(order['discount_amount'])}",
+                      fontSize: 13),
+                AmountRow("Total", rupiah(order['total_price']), bold: true),
+                if (order['payment_method'] == 'cash' && amountPaid > 0) ...[
+                  AmountRow("Uang diterima", rupiah(amountPaid), fontSize: 13),
+                  AmountRow("Kembalian", rupiah(changeAmount), fontSize: 13),
                 ],
-
                 if (isVoid) ...[
-                  const SizedBox(height: 20),
+                  const SizedBox(height: 16),
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
+                      color: theme.dangerSoftColor,
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          "ALASAN VOID:",
-                          style: TextStyle(
-                            color: Colors.redAccent,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 10,
-                          ),
-                        ),
-                        Text(
-                          order['void_reason'] ?? "Tidak ada alasan",
-                          style: const TextStyle(
-                            color: Colors.white70,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
+                    child: Text(
+                      "Dibatalkan: ${order['void_reason'] ?? 'tanpa alasan'}",
+                      style: TextStyle(color: theme.dangerColor, fontSize: 13),
                     ),
                   ),
                 ],
@@ -639,36 +439,20 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
         ),
         actions: [
           if (!isVoid)
-            TextButton.icon(
+            TextButton(
+              style: TextButton.styleFrom(foregroundColor: theme.dangerColor),
               onPressed: () {
-                Navigator.pop(context);
-                _showVoidDialog(order['id'], theme);
+                Navigator.pop(dialogContext);
+                _showVoidDialog(order, theme);
               },
-              icon: const Icon(Icons.cancel, color: Colors.redAccent),
-              label: const Text(
-                "VOID TRANSACTION",
-                style: TextStyle(color: Colors.redAccent),
-              ),
+              child: const Text("Batalkan transaksi"),
             ),
-          if (order['status'].toString().toLowerCase() == 'paid')
-            TextButton.icon(
+          if (status == 'paid')
+            ElevatedButton.icon(
               onPressed: () => _reprintReceipt(order),
-              icon: Icon(Icons.print, color: theme.primaryColor),
-              label: Text(
-                "CETAK ULANG",
-                style: TextStyle(color: theme.primaryColor),
-              ),
+              icon: const Icon(Icons.print_outlined, size: 18),
+              label: const Text("Cetak ulang struk"),
             ),
-          // Di HP sudah ada tombol X di judul; hemat tempat
-          if (!isMobile(context))
-          ElevatedButton.icon(
-            onPressed: () => Navigator.pop(context),
-            icon: const Icon(Icons.check),
-            label: const Text("CLOSE"),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: theme.primaryColor,
-            ),
-          ),
         ],
       ),
     );
@@ -678,175 +462,96 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
     final bool printed = await PrinterService()
         .printCustomerCopy(Map<String, dynamic>.from(order), isReprint: true);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(printed
-            ? "Struk dicetak ulang"
-            : "Printer tidak terhubung. Cek menu Printer."),
-        backgroundColor: printed ? Colors.green : Colors.red,
-      ),
+    showMessage(
+      context,
+      printed ? "Struk dicetak ulang." : "Printer tidak terhubung. Periksa di menu Printer.",
+      success: printed,
+      error: !printed,
     );
   }
 
-  Widget _infoBlock(String label, String value, ThemeProvider theme) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            color: Colors.grey,
-            fontSize: 10,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        Text(
-          value,
-          style: TextStyle(color: theme.textColor, fontWeight: FontWeight.bold),
-        ),
-      ],
-    );
-  }
-
-  Widget _summaryRow(
-    String label,
-    String value,
-    ThemeProvider theme, {
-    Color? color,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Flexible(
-            child: Text(
-              label,
-              style: TextStyle(color: theme.secondaryTextColor, fontSize: 12),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            value,
-            style: TextStyle(color: color ?? theme.textColor, fontSize: 12),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showVoidDialog(int orderId, ThemeProvider theme) {
+  void _showVoidDialog(dynamic order, ThemeProvider theme) {
     final pinController = TextEditingController();
     final reasonController = TextEditingController();
+    bool sending = false;
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: theme.cardColor,
-        title: const Text(
-          "Admin Confirmation",
-          style: TextStyle(
-            color: Colors.redAccent,
-            fontWeight: FontWeight.bold,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialog) => AlertDialog(
+          title: Text("Batalkan ${order['receipt_number']}?"),
+          content: SizedBox(
+            width: 400,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                    "Butuh persetujuan admin. Stok menu dikembalikan dan total shift dihitung ulang."),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: reasonController,
+                  decoration: const InputDecoration(
+                    labelText: "Alasan pembatalan",
+                    hintText: "Contoh: salah input menu",
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: pinController,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 4,
+                  decoration: const InputDecoration(
+                    labelText: "PIN admin",
+                    counterText: "",
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text(
-              "Otoritas Admin diperlukan untuk membatalkan transaksi.",
-              style: TextStyle(color: Colors.grey, fontSize: 12),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text("Kembali"),
             ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: pinController,
-              obscureText: true,
-              keyboardType: TextInputType.number,
-              style: const TextStyle(color: Colors.white),
-              decoration: _inputDeco("Admin PIN", Icons.lock_outline),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: reasonController,
-              style: const TextStyle(color: Colors.white),
-              decoration: _inputDeco("Void Reason (Min. 5 char)", Icons.notes),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: theme.dangerColor),
+              onPressed: sending
+                  ? null
+                  : () async {
+                      if (reasonController.text.trim().length < 5) {
+                        showMessage(dialogContext,
+                            "Tulis alasan minimal 5 huruf.",
+                            error: true);
+                        return;
+                      }
+                      setDialog(() => sending = true);
+                      final res = await _apiService.voidOrder(
+                        order['id'],
+                        pinController.text,
+                        reasonController.text.trim(),
+                      );
+                      if (!dialogContext.mounted) return;
+                      setDialog(() => sending = false);
+                      if (res['status'] == 'success') {
+                        Navigator.pop(dialogContext);
+                        _fetchHistory();
+                        if (mounted) {
+                          showMessage(context, "Transaksi dibatalkan.",
+                              success: true);
+                        }
+                      } else {
+                        showMessage(dialogContext,
+                            res['message'] ?? "Pembatalan gagal.",
+                            error: true);
+                      }
+                    },
+              child: const Text("Batalkan transaksi"),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("CANCEL"),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-            onPressed: () async {
-              if (reasonController.text.length < 5) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("Alasan terlalu pendek!")),
-                );
-                return;
-              }
-              final res = await _apiService.voidOrder(
-                orderId,
-                pinController.text,
-                reasonController.text,
-              );
-              if (res['status'] == 'success') {
-                if (!mounted) return;
-                Navigator.pop(context);
-                _fetchHistory();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text("VOID Berhasil"),
-                    backgroundColor: Colors.green,
-                  ),
-                );
-              } else {
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(res['message'] ?? "Error"),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            },
-            child: const Text("CONFIRM VOID"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  InputDecoration _inputDeco(String hint, IconData icon) {
-    return InputDecoration(
-      labelText: hint,
-      prefixIcon: Icon(icon, size: 20),
-      labelStyle: const TextStyle(color: Colors.grey),
-      enabledBorder: const UnderlineInputBorder(
-        borderSide: BorderSide(color: Colors.white10),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState(ThemeProvider theme) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.history,
-            size: 80,
-            color: theme.secondaryTextColor.withOpacity(0.1),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            "Belum ada transaksi hari ini",
-            style: TextStyle(color: theme.secondaryTextColor),
-          ),
-        ],
       ),
     );
   }

@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:pos_babi_guling/models/discount_model.dart';
 import 'package:pos_babi_guling/models/menu_model.dart';
@@ -164,6 +165,24 @@ void main() {
       cart.clearCart();
       expect(cart.isBill, false);
       expect(cart.totalPrice, 0);
+    });
+  });
+
+  group('Dua printer', () {
+    test('ceker ke printer dapur, struk tetap ke printer struk', () async {
+      SharedPreferences.setMockInitialValues({'printer_mac': 'AA:AA'});
+      final printer = PrinterService();
+
+      // Belum ada printer dapur: ceker ikut printer struk
+      expect(await printer.macFor(PrinterRole.kitchen), 'AA:AA');
+
+      await printer.saveMac('BB:BB', role: PrinterRole.kitchen, name: 'Dapur');
+      expect(await printer.macFor(PrinterRole.kitchen), 'BB:BB');
+      expect(await printer.macFor(PrinterRole.receipt), 'AA:AA');
+      expect(await printer.getSavedName(role: PrinterRole.kitchen), 'Dapur');
+
+      await printer.clearKitchenPrinter();
+      expect(await printer.macFor(PrinterRole.kitchen), 'AA:AA');
     });
   });
 

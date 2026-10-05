@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../providers/cart_provider.dart';
+import '../providers/nav_provider.dart';
 import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
+import '../services/app_settings.dart';
 import '../services/printer_service.dart';
 import '../utils/responsive.dart';
 import 'home_page.dart';
@@ -12,7 +14,7 @@ import 'order_history_page.dart';
 import 'sales_recap_page.dart';
 import 'bills_page.dart';
 import 'petty_cash_page.dart';
-import 'printer_settings_page.dart'; // 🔥 Import printer settings
+import 'printer_settings_page.dart';
 
 class MainLayout extends StatefulWidget {
   const MainLayout({super.key});
@@ -21,20 +23,42 @@ class MainLayout extends StatefulWidget {
   State<MainLayout> createState() => _MainLayoutState();
 }
 
+class _NavItem {
+  final int index;
+  final IconData icon;
+  final String label;
+  const _NavItem(this.index, this.icon, this.label);
+}
+
 class _MainLayoutState extends State<MainLayout> {
-  int _selectedIndex = 0;
   String _cashierName = "";
   final ApiService _apiService = ApiService();
 
-  // Daftar Halaman Utama
-  final List<Widget> _pages = [
-    const HomePage(), // Index 0: Halaman Transaksi/Kasir Utama
-    const BillsPage(), // Index 1: Daftar Meja/Pesanan Gantung
-    const OrderHistoryPage(), // Index 2: Riwayat Transaksi Lunas & Void
-    const PettyCashPage(), // Index 3: Kas Keluar / Petty Cash
-    const SalesRecapPage(), // Index 4: Rekap Penjualan & Tutup Shift
-    const PrinterSettingsPage(), // 🔥 Index 5: SEKARANG MENGARAH KE PRINTER SETTINGS
+  static const List<_NavItem> _items = [
+    _NavItem(NavProvider.kasir, Icons.grid_view_rounded, "Kasir"),
+    _NavItem(NavProvider.bills, Icons.receipt_long_outlined, "Bill"),
+    _NavItem(NavProvider.riwayat, Icons.history_rounded, "Riwayat"),
+    _NavItem(NavProvider.rekap, Icons.bar_chart_rounded, "Rekap"),
+    _NavItem(NavProvider.kasKeluar, Icons.account_balance_wallet_outlined, "Kas keluar"),
+    _NavItem(NavProvider.printer, Icons.print_outlined, "Printer"),
   ];
+
+  Widget _page(int index) {
+    switch (index) {
+      case NavProvider.bills:
+        return const BillsPage();
+      case NavProvider.riwayat:
+        return const OrderHistoryPage();
+      case NavProvider.kasKeluar:
+        return const PettyCashPage();
+      case NavProvider.rekap:
+        return const SalesRecapPage();
+      case NavProvider.printer:
+        return const PrinterSettingsPage();
+      default:
+        return const HomePage();
+    }
+  }
 
   @override
   void initState() {
@@ -48,45 +72,35 @@ class _MainLayoutState extends State<MainLayout> {
       setState(() => _cashierName = prefs.getString('user_name') ?? "");
     }
 
-    // Buka shift (otomatis di server) & ambil tarif pajak yang berlaku
-    final response = await _apiService.checkSettlementStatus();
-    if (response['status'] == 'success') {
-      debugPrint("Shift Active: ${response['data']?['starting_cash']}");
-    }
-
-    final settings = await _apiService.getSettings();
-    if (mounted && settings['status'] == 'success') {
-      final taxRate = settings['data']?['tax_rate'];
-      if (taxRate is num) {
-        Provider.of<CartProvider>(context, listen: false)
-            .setTaxPercent(taxRate);
-      }
+    // Buka shift (otomatis di server), lalu ambil pengaturan toko terbaru
+    await _apiService.checkSettlementStatus();
+    await AppSettings().refresh();
+    if (mounted) {
+      Provider.of<CartProvider>(context, listen: false)
+          .setTaxPercent(AppSettings().taxPercent);
     }
 
     // Sambungkan printer tersimpan supaya struk pertama tidak gagal
     PrinterService().ensureConnected();
   }
 
-  Future<void> _confirmLogout(ThemeProvider theme) async {
+  Future<void> _confirmLogout() async {
     final bool? confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: theme.cardColor,
-        title: Text("Keluar?", style: TextStyle(color: theme.textColor)),
-        content: Text(
-          "Shift TIDAK ditutup dan tetap berjalan saat Anda login lagi.\n"
-          "Untuk tutup shift & cetak settlement, pakai menu Rekap.",
-          style: TextStyle(color: theme.secondaryTextColor),
+        title: const Text("Keluar dari aplikasi?"),
+        content: const Text(
+          "Shift Anda tetap berjalan dan bisa dilanjutkan saat masuk lagi. "
+          "Untuk menutup shift dan mencetak settlement, buka menu Rekap.",
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text("BATAL"),
+            child: const Text("Batal"),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
             onPressed: () => Navigator.pop(context, true),
-            child: const Text("KELUAR", style: TextStyle(color: Colors.white)),
+            child: const Text("Keluar"),
           ),
         ],
       ),
@@ -96,6 +110,7 @@ class _MainLayoutState extends State<MainLayout> {
     await _apiService.logout();
     if (!mounted) return;
     Provider.of<CartProvider>(context, listen: false).clearCart();
+    Provider.of<NavProvider>(context, listen: false).goTo(NavProvider.kasir);
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (context) => const LoginPage()),
@@ -103,19 +118,17 @@ class _MainLayoutState extends State<MainLayout> {
     );
   }
 
-  // --- NAVIGASI VERSI HP ---
-  // Bar bawah: Kasir, Bills, Riwayat, Rekap, Lainnya (Kas Keluar, Printer, Keluar)
-  static const List<int> _bottomNavPages = [0, 1, 2, 4];
+  // --- HP: bar bawah Kasir, Bill, Riwayat, Rekap, Lainnya ---
+  static const List<int> _bottomNavPages = [
+    NavProvider.kasir,
+    NavProvider.bills,
+    NavProvider.riwayat,
+    NavProvider.rekap,
+  ];
 
-  int get _bottomNavIndex {
-    final int index = _bottomNavPages.indexOf(_selectedIndex);
-    return index >= 0 ? index : _bottomNavPages.length;
-  }
-
-  void _showMoreMenu(ThemeProvider theme) {
+  void _showMoreMenu(ThemeProvider theme, NavProvider nav) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: theme.cardColor,
       useSafeArea: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
@@ -130,7 +143,7 @@ class _MainLayoutState extends State<MainLayout> {
             title: Text(label,
                 style: TextStyle(
                     color: color ?? theme.textColor,
-                    fontWeight: active ? FontWeight.bold : FontWeight.normal)),
+                    fontWeight: active ? FontWeight.w600 : FontWeight.w400)),
             trailing: active
                 ? Icon(Icons.check, color: theme.primaryColor, size: 18)
                 : null,
@@ -158,24 +171,30 @@ class _MainLayoutState extends State<MainLayout> {
               if (_cashierName.isNotEmpty)
                 ListTile(
                   leading: CircleAvatar(
-                    backgroundColor: theme.primaryColor.withAlpha(40),
-                    child: Icon(Icons.person, color: theme.primaryColor),
+                    backgroundColor: theme.primarySoftColor,
+                    child: Text(
+                      _cashierName.characters.take(2).toString().toUpperCase(),
+                      style: TextStyle(
+                          color: theme.primaryDarkColor,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13),
+                    ),
                   ),
                   title: Text(_cashierName,
                       style: TextStyle(
-                          color: theme.textColor, fontWeight: FontWeight.bold)),
-                  subtitle: Text("Kasir yang sedang bertugas",
-                      style: TextStyle(color: theme.secondaryTextColor)),
+                          color: theme.textColor, fontWeight: FontWeight.w600)),
+                  subtitle: Text("Shift sedang berjalan",
+                      style: TextStyle(color: theme.successColor)),
                 ),
               Divider(color: theme.borderColor),
-              item(Icons.account_balance_wallet_outlined, "Kas Keluar",
-                  () => setState(() => _selectedIndex = 3),
-                  active: _selectedIndex == 3),
+              item(Icons.account_balance_wallet_outlined, "Kas keluar",
+                  () => nav.goTo(NavProvider.kasKeluar),
+                  active: nav.index == NavProvider.kasKeluar),
               item(Icons.print_outlined, "Printer",
-                  () => setState(() => _selectedIndex = 5),
-                  active: _selectedIndex == 5),
-              item(Icons.logout, "Keluar", () => _confirmLogout(theme),
-                  color: Colors.redAccent),
+                  () => nav.goTo(NavProvider.printer),
+                  active: nav.index == NavProvider.printer),
+              item(Icons.logout, "Keluar", _confirmLogout,
+                  color: theme.dangerColor),
             ],
           ),
         );
@@ -183,52 +202,60 @@ class _MainLayoutState extends State<MainLayout> {
     );
   }
 
-  Widget _buildBottomNav(ThemeProvider theme) {
-    return NavigationBarTheme(
-      data: NavigationBarThemeData(
-        backgroundColor: theme.cardColor,
-        indicatorColor: theme.primaryColor,
-        height: 68,
-        labelTextStyle: WidgetStateProperty.resolveWith(
-          (states) => TextStyle(
-            fontSize: 11,
-            fontWeight: states.contains(WidgetState.selected)
-                ? FontWeight.bold
-                : FontWeight.normal,
-            color: states.contains(WidgetState.selected)
-                ? theme.primaryColor
-                : theme.secondaryTextColor,
-          ),
-        ),
-        iconTheme: WidgetStateProperty.resolveWith(
-          (states) => IconThemeData(
-            color: states.contains(WidgetState.selected)
-                ? Colors.white
-                : theme.secondaryTextColor,
-          ),
-        ),
+  Widget _buildBottomNav(ThemeProvider theme, NavProvider nav) {
+    final int selected = _bottomNavPages.indexOf(nav.index);
+    return Container(
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: theme.borderColor)),
       ),
-      child: NavigationBar(
-        selectedIndex: _bottomNavIndex,
-        onDestinationSelected: (index) {
-          if (index == _bottomNavPages.length) {
-            _showMoreMenu(theme);
-          } else {
-            setState(() => _selectedIndex = _bottomNavPages[index]);
-          }
-        },
-        destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.grid_view_rounded), label: "Kasir"),
-          NavigationDestination(
-              icon: Icon(Icons.receipt_long_rounded), label: "Bills"),
-          NavigationDestination(
-              icon: Icon(Icons.history_rounded), label: "Riwayat"),
-          NavigationDestination(
-              icon: Icon(Icons.analytics_outlined), label: "Rekap"),
-          NavigationDestination(
-              icon: Icon(Icons.more_horiz_rounded), label: "Lainnya"),
-        ],
+      child: NavigationBarTheme(
+        data: NavigationBarThemeData(
+          backgroundColor: theme.cardColor,
+          surfaceTintColor: Colors.transparent,
+          indicatorColor: theme.primarySoftColor,
+          height: 66,
+          labelTextStyle: WidgetStateProperty.resolveWith(
+            (states) => TextStyle(
+              fontFamily: 'PlusJakartaSans',
+              fontSize: 11.5,
+              fontWeight: states.contains(WidgetState.selected)
+                  ? FontWeight.w600
+                  : FontWeight.w400,
+              color: states.contains(WidgetState.selected)
+                  ? theme.primaryDarkColor
+                  : theme.secondaryTextColor,
+            ),
+          ),
+          iconTheme: WidgetStateProperty.resolveWith(
+            (states) => IconThemeData(
+              color: states.contains(WidgetState.selected)
+                  ? theme.primaryDarkColor
+                  : theme.secondaryTextColor,
+            ),
+          ),
+        ),
+        child: NavigationBar(
+          selectedIndex: selected >= 0 ? selected : _bottomNavPages.length,
+          onDestinationSelected: (index) {
+            if (index == _bottomNavPages.length) {
+              _showMoreMenu(theme, nav);
+            } else {
+              nav.goTo(_bottomNavPages[index]);
+            }
+          },
+          destinations: const [
+            NavigationDestination(
+                icon: Icon(Icons.grid_view_rounded), label: "Kasir"),
+            NavigationDestination(
+                icon: Icon(Icons.receipt_long_outlined), label: "Bill"),
+            NavigationDestination(
+                icon: Icon(Icons.history_rounded), label: "Riwayat"),
+            NavigationDestination(
+                icon: Icon(Icons.bar_chart_rounded), label: "Rekap"),
+            NavigationDestination(
+                icon: Icon(Icons.more_horiz_rounded), label: "Lainnya"),
+          ],
+        ),
       ),
     );
   }
@@ -236,100 +263,99 @@ class _MainLayoutState extends State<MainLayout> {
   @override
   Widget build(BuildContext context) {
     final theme = Provider.of<ThemeProvider>(context);
+    final nav = Provider.of<NavProvider>(context);
 
     if (isMobile(context)) {
       return Scaffold(
         backgroundColor: theme.backgroundColor,
-        body: SafeArea(bottom: false, child: _pages[_selectedIndex]),
-        bottomNavigationBar: _buildBottomNav(theme),
+        body: SafeArea(bottom: false, child: _page(nav.index)),
+        bottomNavigationBar: _buildBottomNav(theme, nav),
       );
     }
 
     return Scaffold(
       backgroundColor: theme.backgroundColor,
-      body: Row(
-        children: [
-          _buildJaegarSidebar(theme),
-          // Area Konten Utama
-          Expanded(
-            child: Container(
-              color: theme.backgroundColor,
-              // Menggunakan navigasi index biasa sesuai kode awal kamu agar login lancar
-              child: _pages[_selectedIndex],
-            ),
-          ),
-        ],
+      body: SafeArea(
+        child: Row(
+          children: [
+            _buildRail(theme, nav),
+            Expanded(child: _page(nav.index)),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildJaegarSidebar(ThemeProvider theme) {
+  // --- Tablet: rail navigasi di kiri ---
+  Widget _buildRail(ThemeProvider theme, NavProvider nav) {
     return Container(
-      width: 100,
+      width: 88,
       decoration: BoxDecoration(
         color: theme.cardColor,
-        border: Border(right: BorderSide(color: theme.borderColor, width: 1)),
+        border: Border(right: BorderSide(color: theme.borderColor)),
       ),
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
       child: Column(
         children: [
-          // 1. LOGO RESTO
           Container(
-            margin: const EdgeInsets.only(top: 24, bottom: 8),
-            padding: const EdgeInsets.all(12),
+            width: 40,
+            height: 40,
+            margin: const EdgeInsets.only(bottom: 16),
             decoration: BoxDecoration(
-              color: theme.primaryColor.withAlpha(25),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Icon(
-              Icons.restaurant_menu,
               color: theme.primaryColor,
-              size: 32,
+              borderRadius: BorderRadius.circular(10),
             ),
+            alignment: Alignment.center,
+            child: const Text("MG",
+                style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14)),
           ),
-          if (_cashierName.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Text(
-                _cashierName,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: theme.secondaryTextColor, fontSize: 11),
-              ),
-            ),
-          const SizedBox(height: 8),
-
-          // 2. NAVIGASI MENU
           Expanded(
             child: SingleChildScrollView(
               child: Column(
                 children: [
-                  _sidebarItem(Icons.grid_view_rounded, "Kasir", 0, theme),
-                  _sidebarItem(Icons.receipt_long_rounded, "Bills", 1, theme),
-                  _sidebarItem(Icons.history_rounded, "Riwayat", 2, theme),
-                  _sidebarItem(Icons.account_balance_wallet_outlined,
-                      "Kas Keluar", 3, theme),
-                  _sidebarItem(Icons.analytics_outlined, "Rekap", 4, theme),
-                  _sidebarItem(Icons.print_outlined, "Printer", 5, theme),
+                  for (final item in _items) _railItem(item, theme, nav),
                 ],
               ),
             ),
           ),
-
-          // 3. LOGOUT (tanpa tutup shift)
-          InkWell(
-            onTap: () => _confirmLogout(theme),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 16),
+          if (_cashierName.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
               child: Column(
                 children: [
-                  const Icon(Icons.logout, color: Colors.redAccent, size: 24),
-                  const SizedBox(height: 4),
-                  Text(
-                    "Keluar",
-                    style:
-                        TextStyle(color: theme.secondaryTextColor, fontSize: 11),
-                  ),
+                  Text(_cashierName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                          color: theme.textColor,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w600)),
+                  Text("Shift buka",
+                      style:
+                          TextStyle(color: theme.successColor, fontSize: 11)),
                 ],
+              ),
+            ),
+          Tooltip(
+            message: "Keluar",
+            child: InkWell(
+              onTap: _confirmLogout,
+              borderRadius: BorderRadius.circular(10),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Column(
+                  children: [
+                    Icon(Icons.logout, color: theme.dangerColor, size: 22),
+                    const SizedBox(height: 3),
+                    Text("Keluar",
+                        style: TextStyle(
+                            color: theme.secondaryTextColor, fontSize: 11)),
+                  ],
+                ),
               ),
             ),
           ),
@@ -338,81 +364,40 @@ class _MainLayoutState extends State<MainLayout> {
     );
   }
 
-  Widget _sidebarItem(
-      IconData icon, String label, int index, ThemeProvider theme) {
-    bool isActive = _selectedIndex == index;
-
-    return GestureDetector(
-      onTap: () {
-        setState(() => _selectedIndex = index);
-      },
-      child: Container(
-        width: 100,
-        height: 85,
-        color: Colors.transparent,
-        child: Stack(
-          children: [
-            // Highlight indikator di sisi kanan
-            if (isActive)
-              Positioned(
-                right: 0,
-                top: 10,
-                bottom: 10,
-                child: Container(
-                  width: 4,
-                  decoration: BoxDecoration(
-                    color: theme.primaryColor,
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(4),
-                      bottomLeft: Radius.circular(4),
-                    ),
+  Widget _railItem(_NavItem item, ThemeProvider theme, NavProvider nav) {
+    final bool active = nav.index == item.index;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Material(
+        color: active ? theme.primarySoftColor : Colors.transparent,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: () => nav.goTo(item.index),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Column(
+              children: [
+                Icon(item.icon,
+                    size: 23,
+                    color: active
+                        ? theme.primaryDarkColor
+                        : theme.secondaryTextColor),
+                const SizedBox(height: 4),
+                Text(
+                  item.label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: active
+                        ? theme.primaryDarkColor
+                        : theme.secondaryTextColor,
+                    fontWeight: active ? FontWeight.w600 : FontWeight.w400,
                   ),
                 ),
-              ),
-
-            // Icon Utama + label
-            Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: isActive ? theme.primaryColor : Colors.transparent,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: isActive
-                          ? [
-                              BoxShadow(
-                                color: theme.primaryColor.withAlpha(76),
-                                blurRadius: 10,
-                                offset: const Offset(0, 4),
-                              ),
-                            ]
-                          : [],
-                    ),
-                    child: Icon(
-                      icon,
-                      color: isActive ? Colors.white : theme.secondaryTextColor,
-                      size: 26,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: isActive
-                          ? theme.primaryColor
-                          : theme.secondaryTextColor,
-                      fontSize: 11,
-                      fontWeight:
-                          isActive ? FontWeight.bold : FontWeight.normal,
-                    ),
-                  ),
-                ],
-              ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

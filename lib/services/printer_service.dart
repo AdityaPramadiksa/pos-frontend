@@ -6,6 +6,11 @@ import 'package:flutter/foundation.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../utils/formatters.dart';
+import 'app_settings.dart';
+
+/// Printer struk: struk pelanggan, bill, rekap & settlement.
+/// Printer dapur: ceker dapur. Kalau belum diatur, ceker ikut ke printer struk.
+enum PrinterRole { receipt, kitchen }
 
 class PrinterService {
   static final PrinterService _instance = PrinterService._internal();
@@ -14,43 +19,128 @@ class PrinterService {
 
   static const String defaultMacAddress = "DC:0D:51:8A:7C:DA";
   static const String _macPrefKey = 'printer_mac';
+  static const String _namePrefKey = 'printer_name';
+  static const String _kitchenMacPrefKey = 'kitchen_printer_mac';
+  static const String _kitchenNamePrefKey = 'kitchen_printer_name';
 
   // Kertas 58mm = 32 karakter per baris (font A)
   static const int _width = 32;
   static const String _dash = "--------------------------------";
   static const String _double = "================================";
 
-  // --- KONEKSI ---
+  // Plugin Bluetooth hanya bisa memegang SATU koneksi. Untuk 2 printer,
+  // koneksi dipindah bergantian, dan semua cetakan diantre supaya tidak bentrok.
+  String? _activeMac;
+  Future<void> _queue = Future.value();
+
+  /// MAC printer yang sedang tersambung (sepengetahuan aplikasi)
+  String? get activeMac => _activeMac;
+
+  Future<T> _serialize<T>(Future<T> Function() job) {
+    final Future<T> result = _queue.then((_) => job());
+    _queue = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
+  // --- PENGATURAN PRINTER ---
   Future<String> getSavedMac() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_macPrefKey) ?? defaultMacAddress;
   }
 
-  Future<void> saveMac(String mac) async {
+  Future<String?> getSavedName({PrinterRole role = PrinterRole.receipt}) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_macPrefKey, mac);
+    return prefs.getString(
+        role == PrinterRole.kitchen ? _kitchenNamePrefKey : _namePrefKey);
   }
 
-  /// Pastikan printer tersambung; kalau putus, coba sambung ulang ke printer tersimpan.
-  Future<bool> ensureConnected() async {
-    if (kIsWeb) return false;
+  /// MAC printer dapur yang diatur khusus (null = pakai printer struk)
+  Future<String?> getKitchenMac() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_kitchenMacPrefKey);
+  }
+
+  Future<String> macFor(PrinterRole role) async {
+    if (role == PrinterRole.kitchen) {
+      final String? kitchen = await getKitchenMac();
+      if (kitchen != null && kitchen.isNotEmpty) return kitchen;
+    }
+    return getSavedMac();
+  }
+
+  Future<void> saveMac(String mac,
+      {PrinterRole role = PrinterRole.receipt, String? name}) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (role == PrinterRole.kitchen) {
+      await prefs.setString(_kitchenMacPrefKey, mac);
+      await prefs.setString(_kitchenNamePrefKey, name ?? '');
+    } else {
+      await prefs.setString(_macPrefKey, mac);
+      await prefs.setString(_namePrefKey, name ?? '');
+    }
+  }
+
+  /// Ceker dapur kembali dicetak di printer struk
+  Future<void> clearKitchenPrinter() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kitchenMacPrefKey);
+    await prefs.remove(_kitchenNamePrefKey);
+  }
+
+  Future<bool> _hasSeparateKitchenPrinter() async =>
+      await macFor(PrinterRole.kitchen) != await getSavedMac();
+
+  /// Dimatikan di test: plugin Bluetooth berjalan lewat jalur Windows di laptop
+  @visibleForTesting
+  static bool debugDisabled = false;
+
+  // --- KONEKSI ---
+  Future<bool> _connectTo(String mac) async {
+    if (kIsWeb || debugDisabled) return false;
     try {
-      if (await PrintBluetoothThermal.connectionStatus) return true;
+      if (_activeMac == mac && await PrintBluetoothThermal.connectionStatus) {
+        return true;
+      }
       if (!await PrintBluetoothThermal.bluetoothEnabled) return false;
-      return await PrintBluetoothThermal.connect(
-          macPrinterAddress: await getSavedMac());
+
+      // Lepas koneksi lama (printer lain / koneksi nyangkut) sebelum pindah
+      await PrintBluetoothThermal.disconnect;
+      await Future.delayed(const Duration(milliseconds: 400));
+
+      final bool connected =
+          await PrintBluetoothThermal.connect(macPrinterAddress: mac);
+      _activeMac = connected ? mac : null;
+      return connected;
     } catch (e) {
-      debugPrint("Gagal sambung printer: $e");
+      debugPrint("Gagal sambung printer $mac: $e");
+      _activeMac = null;
       return false;
     }
   }
 
-  Future<bool> _sendToPrinter(List<int> bytes) async {
-    if (!await ensureConnected()) {
-      debugPrint("Printer tidak terhubung.");
-      return false;
-    }
-    return await PrintBluetoothThermal.writeBytes(bytes);
+  /// Pastikan printer untuk peran tsb tersambung (sambung/pindah bila perlu).
+  Future<bool> ensureConnected({PrinterRole role = PrinterRole.receipt}) =>
+      _serialize(() async => _connectTo(await macFor(role)));
+
+  /// Sambung ke printer tertentu (dari halaman pengaturan printer)
+  Future<bool> connectMac(String mac) => _serialize(() => _connectTo(mac));
+
+  Future<void> disconnect() => _serialize(() async {
+        try {
+          await PrintBluetoothThermal.disconnect;
+        } catch (_) {}
+        _activeMac = null;
+      });
+
+  Future<bool> _sendToPrinter(List<int> bytes,
+      {PrinterRole role = PrinterRole.receipt}) {
+    return _serialize(() async {
+      if (!await _connectTo(await macFor(role))) {
+        debugPrint("Printer ${role.name} tidak terhubung.");
+        return false;
+      }
+      return await PrintBluetoothThermal.writeBytes(bytes);
+    });
   }
 
   Future<Generator> _generator() async {
@@ -105,9 +195,18 @@ class PrinterService {
     try {
       final g = await _generator();
       List<int> bytes = _buildKitchenBytes(g, order);
-      bytes += g.feed(4);
+      if (!await _hasSeparateKitchenPrinter()) {
+        // Satu printer tanpa auto-cut: beri jarak & garis sobek supaya
+        // ceker tidak menyambung dengan struk pelanggan sesudahnya.
+        bytes += g.feed(2);
+        bytes += g.text("- - - - sobek di sini - - - -",
+            styles: const PosStyles(align: PosAlign.center));
+        bytes += g.feed(4);
+      } else {
+        bytes += g.feed(4);
+      }
       bytes += g.cut();
-      return await _sendToPrinter(bytes);
+      return await _sendToPrinter(bytes, role: PrinterRole.kitchen);
     } catch (e) {
       debugPrint("Error print kitchen order: $e");
       return false;
@@ -125,20 +224,27 @@ class PrinterService {
       bytes += g.feed(1);
     }
 
-    bytes += g.text("WARUNG BABI GULING",
-        styles: const PosStyles(align: PosAlign.center, bold: true));
-    bytes += g.text("MEN GEDE",
-        styles: const PosStyles(
-            align: PosAlign.center,
-            bold: true,
-            height: PosTextSize.size2,
-            width: PosTextSize.size2));
-    bytes += g.text("Jl. Poppies I, Kuta, Kec. Kuta",
-        styles: const PosStyles(align: PosAlign.center));
-    bytes += g.text("Kab. Badung, Bali 80361",
-        styles: const PosStyles(align: PosAlign.center));
-    bytes += g.text("Telp: 0822-3660-6374",
-        styles: const PosStyles(align: PosAlign.center));
+    // Identitas warung dari panel admin > Pengaturan
+    final shop = AppSettings();
+    final List<String> nameLines = _lines(shop.shopName);
+    for (int i = 0; i < nameLines.length; i++) {
+      // Baris terakhir nama dicetak besar bila muat (maks 16 huruf ukuran ganda)
+      final bool big = i == nameLines.length - 1 && nameLines[i].length <= 16;
+      bytes += g.text(_safe(nameLines[i]),
+          styles: PosStyles(
+              align: PosAlign.center,
+              bold: true,
+              height: big ? PosTextSize.size2 : PosTextSize.size1,
+              width: big ? PosTextSize.size2 : PosTextSize.size1));
+    }
+    for (final line in _lines(shop.shopAddress)) {
+      bytes += g.text(_safe(line),
+          styles: const PosStyles(align: PosAlign.center));
+    }
+    if (shop.shopPhone.trim().isNotEmpty) {
+      bytes += g.text(_safe("Telp: ${shop.shopPhone.trim()}"),
+          styles: const PosStyles(align: PosAlign.center));
+    }
     bytes += g.text(_dash);
     if (isBill) {
       bytes += g.text("TAGIHAN (BELUM LUNAS)",
@@ -149,7 +255,9 @@ class PrinterService {
           styles: const PosStyles(align: PosAlign.center, bold: true));
     }
     bytes += g.text("Inv  : ${order['receipt_number'] ?? '-'}");
-    bytes += g.text(_safe("Kasir: ${order['user']?['name'] ?? 'Kasir'}"));
+    if (shop.showCashierOnReceipt) {
+      bytes += g.text(_safe("Kasir: ${order['user']?['name'] ?? 'Kasir'}"));
+    }
     bytes += g.text(
         "Waktu: ${_formatTime(order['paid_at'] ?? order['created_at'])}");
     bytes += g.text(_safe("Tipe : ${_orderTypeLabel(order)}"));
@@ -219,15 +327,25 @@ class PrinterService {
           styles: const PosStyles(align: PosAlign.center));
     }
 
+    // Catatan kaki dari Pengaturan: baris pertama tebal, sisanya huruf kecil
     bytes += g.feed(1);
-    bytes += g.text("Matur Suksma!",
-        styles: const PosStyles(align: PosAlign.center, bold: true));
-    bytes += g.text("Terima Kasih Atas Kunjungan Anda",
-        styles: const PosStyles(
-            align: PosAlign.center, fontType: PosFontType.fontB));
+    final List<String> footer = _lines(shop.receiptFooter);
+    for (int i = 0; i < footer.length; i++) {
+      bytes += g.text(_safe(footer[i]),
+          styles: i == 0
+              ? const PosStyles(align: PosAlign.center, bold: true)
+              : const PosStyles(
+                  align: PosAlign.center, fontType: PosFontType.fontB));
+    }
 
     return bytes;
   }
+
+  List<String> _lines(String text) => text
+      .split(RegExp(r'\r?\n'))
+      .map((l) => l.trim())
+      .where((l) => l.isNotEmpty)
+      .toList();
 
   // --- BUILDER CEKER DAPUR ---
   List<int> _buildKitchenBytes(Generator g, Map<String, dynamic> order) {
@@ -238,6 +356,11 @@ class PrinterService {
     bytes += g.text("CEKER DAPUR",
         styles: const PosStyles(
             align: PosAlign.center, bold: true, height: PosTextSize.size2));
+    if (order['kitchen_title'] != null) {
+      // Mis. "TAMBAHAN": pesanan susulan untuk bill yang sudah ada
+      bytes += g.text(_safe("** ${order['kitchen_title']} **"),
+          styles: const PosStyles(align: PosAlign.center, bold: true));
+    }
     bytes += g.text(_safe("Meja: ${table.isEmpty ? '-' : table}"),
         styles:
             const PosStyles(align: PosAlign.center, height: PosTextSize.size2));
@@ -326,7 +449,7 @@ class PrinterService {
     bytes += g.text(part,
         styles: const PosStyles(align: PosAlign.center, bold: true));
     bytes += g.text(_double);
-    bytes += g.text("Babi Guling Men Gede");
+    bytes += g.text(_safe(_lines(AppSettings().shopName).join(' ')));
     bytes += g.text(_safe("Kasir : ${settlement['cashier'] ?? 'Kasir'}"));
     bytes += g.text("Shift : #${settlement['id'] ?? '-'}");
     bytes += g.text("Buka  : ${_formatTime(settlement['opened_at'])}");
@@ -493,13 +616,16 @@ class PrinterService {
   }
 
   // --- 5. TES CETAK ---
-  Future<bool> printTest() async {
+  Future<bool> printTest({PrinterRole role = PrinterRole.receipt}) async {
     try {
       final g = await _generator();
       List<int> bytes = [];
       bytes += g.text("TES PRINTER",
           styles: const PosStyles(
               align: PosAlign.center, bold: true, height: PosTextSize.size2));
+      bytes += g.text(
+          role == PrinterRole.kitchen ? "CEKER DAPUR" : "STRUK / BILL / SETTLEMENT",
+          styles: const PosStyles(align: PosAlign.center, bold: true));
       bytes += g.text(_dash);
       bytes += g.text(_lr("Kiri", "Kanan"));
       bytes += g.text(_lr("Rupiah", rupiah(1500000)));
@@ -509,7 +635,7 @@ class PrinterService {
           styles: const PosStyles(align: PosAlign.center));
       bytes += g.feed(3);
       bytes += g.cut();
-      return await _sendToPrinter(bytes);
+      return await _sendToPrinter(bytes, role: role);
     } catch (e) {
       debugPrint("Gagal tes cetak: $e");
       return false;

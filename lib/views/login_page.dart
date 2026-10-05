@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
 import '../utils/responsive.dart';
+import '../widgets/ui.dart';
 import 'main_layout.dart';
 
 class LoginPage extends StatefulWidget {
@@ -22,6 +25,11 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
+  void _deleteDigit() {
+    if (_isLoading || _pin.isEmpty) return;
+    setState(() => _pin = _pin.substring(0, _pin.length - 1));
+  }
+
   void _login() async {
     setState(() => _isLoading = true);
     final result = await ApiService().loginPin(_pin);
@@ -35,13 +43,9 @@ class _LoginPageState extends State<LoginPage> {
         MaterialPageRoute(builder: (context) => const MainLayout()),
       );
     } else {
-      setState(() => _pin = ""); // Reset
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(result['message'] ?? 'PIN Salah!'),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+      setState(() => _pin = "");
+      showMessage(context, result['message'] ?? 'PIN salah. Coba lagi.',
+          error: true);
     }
   }
 
@@ -51,41 +55,34 @@ class _LoginPageState extends State<LoginPage> {
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF2D303E),
-        title: const Text(
-          "Alamat Server",
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        content: TextField(
-          controller: controller,
-          keyboardType: TextInputType.url,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            labelText: "IP laptop server",
-            hintText: "contoh: 192.168.1.10",
-            helperText: "Tanpa port = 8000",
-            labelStyle: TextStyle(color: Colors.grey),
-            hintStyle: TextStyle(color: Colors.grey),
-            helperStyle: TextStyle(color: Colors.grey),
+      builder: (dialogContext) => AlertDialog(
+        title: const Text("Alamat server"),
+        content: SizedBox(
+          width: 360,
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: TextInputType.url,
+            decoration: const InputDecoration(
+              labelText: "IP laptop server",
+              hintText: "Contoh: 192.168.1.10",
+              helperText: "Port 8000 dipakai bila tidak ditulis.",
+            ),
           ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("BATAL", style: TextStyle(color: Colors.grey)),
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text("Batal"),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFEA7C69),
-            ),
             onPressed: () async {
               await ApiService.saveServerAddress(controller.text);
-              if (!context.mounted) return;
-              Navigator.pop(context);
+              if (!dialogContext.mounted) return;
+              Navigator.pop(dialogContext);
               setState(() {});
             },
-            child: const Text("SIMPAN", style: TextStyle(color: Colors.white)),
+            child: const Text("Simpan"),
           ),
         ],
       ),
@@ -94,100 +91,140 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF1F1D2B),
-      floatingActionButton: FloatingActionButton.small(
-        backgroundColor: const Color(0xFF2D303E),
-        tooltip: "Alamat server: ${ApiService.ipAddress}",
-        onPressed: _showServerDialog,
-        child: const Icon(Icons.settings, color: Colors.grey),
-      ),
-      body: Center(
-        // 🔥 TAMBAHKAN SINGLE CHILD SCROLL VIEW DI SINI 🔥
-        child: SingleChildScrollView(
-          child: Container(
-            width: 400,
-            margin: const EdgeInsets.all(16),
-            padding: EdgeInsets.all(isMobile(context) ? 24 : 40),
-            decoration: BoxDecoration(
-              color: const Color(0xFF2D303E),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: const Color(0xFF393C49)),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.restaurant_menu,
-                  size: 60,
-                  color: Color(0xFFEA7C69),
-                ),
-                const SizedBox(height: 16),
-                const Text(
-                  'POS BABI GULING',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 24,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 30),
+    final theme = Provider.of<ThemeProvider>(context);
+    final bool mobile = isMobile(context);
 
-                // PIN Dots
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(
-                    4,
-                    (index) => Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 10),
-                      width: 15,
-                      height: 15,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: _pin.length > index
-                            ? const Color(0xFFEA7C69)
-                            : Colors.transparent,
-                        border: Border.all(color: const Color(0xFFEA7C69)),
-                      ),
+    return Scaffold(
+      backgroundColor: theme.backgroundColor,
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 380),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.all(mobile ? 24 : 32),
+                    decoration: BoxDecoration(
+                      color: theme.cardColor,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: theme.borderColor),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 48,
+                          height: 48,
+                          alignment: Alignment.center,
+                          decoration: BoxDecoration(
+                            color: theme.primaryColor,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Text("MG",
+                              style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 16)),
+                        ),
+                        const SizedBox(height: 14),
+                        Text("Kasir Men Gede",
+                            style: TextStyle(
+                                color: theme.textColor,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 4),
+                        Text("Masukkan PIN 4 angka",
+                            style: TextStyle(color: theme.secondaryTextColor)),
+                        const SizedBox(height: 24),
+
+                        // Titik PIN
+                        Semantics(
+                          label: "${_pin.length} dari 4 angka PIN terisi",
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: List.generate(
+                              4,
+                              (index) => Container(
+                                margin:
+                                    const EdgeInsets.symmetric(horizontal: 9),
+                                width: 14,
+                                height: 14,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: _pin.length > index
+                                      ? theme.inkColor
+                                      : Colors.transparent,
+                                  border: Border.all(
+                                      color: _pin.length > index
+                                          ? theme.inkColor
+                                          : theme.fieldBorderColor,
+                                      width: 1.6),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 28),
+
+                        // Papan angka
+                        GridView.builder(
+                          shrinkWrap: true,
+                          physics: const NeverScrollableScrollPhysics(),
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
+                            crossAxisCount: 3,
+                            mainAxisExtent: 60,
+                            mainAxisSpacing: 10,
+                            crossAxisSpacing: 10,
+                          ),
+                          itemCount: 12,
+                          itemBuilder: (context, index) {
+                            if (index == 9) return const SizedBox();
+                            if (index == 10) return _buildNumBtn("0", theme);
+                            if (index == 11) {
+                              return IconButton(
+                                tooltip: "Hapus angka",
+                                onPressed: _deleteDigit,
+                                icon: Icon(Icons.backspace_outlined,
+                                    color: theme.secondaryTextColor),
+                              );
+                            }
+                            return _buildNumBtn("${index + 1}", theme);
+                          },
+                        ),
+                        SizedBox(
+                          height: 36,
+                          child: _isLoading
+                              ? const Padding(
+                                  padding: EdgeInsets.only(top: 14),
+                                  child: SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2)),
+                                )
+                              : null,
+                        ),
+                      ],
                     ),
                   ),
-                ),
-                const SizedBox(height: 40),
-
-                // Numpad
-                GridView.builder(
-                  shrinkWrap: true,
-                  physics:
-                      const NeverScrollableScrollPhysics(), // 🔥 MATIKAN SCROLL DALAM GRID BIAR NGGAK BENTROK
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    childAspectRatio: 1.5,
-                    mainAxisSpacing: 10,
-                    crossAxisSpacing: 10,
+                  const SizedBox(height: 12),
+                  TextButton.icon(
+                    onPressed: _showServerDialog,
+                    icon: Icon(Icons.dns_outlined,
+                        size: 16, color: theme.secondaryTextColor),
+                    label: Text("Server ${ApiService.ipAddress} · Ubah",
+                        style: TextStyle(
+                            color: theme.secondaryTextColor,
+                            fontWeight: FontWeight.w500,
+                            fontSize: 13)),
                   ),
-                  itemCount: 12,
-                  itemBuilder: (context, index) {
-                    if (index == 9) return const SizedBox();
-                    if (index == 10) return _buildNumBtn("0");
-                    if (index == 11) {
-                      return IconButton(
-                        onPressed: () => setState(
-                          () => _pin = _pin.isNotEmpty
-                              ? _pin.substring(0, _pin.length - 1)
-                              : "",
-                        ),
-                        icon: const Icon(Icons.backspace, color: Colors.white),
-                      );
-                    }
-                    return _buildNumBtn("${index + 1}");
-                  },
-                ),
-                if (_isLoading)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 20),
-                    child: CircularProgressIndicator(color: Color(0xFFEA7C69)),
-                  ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -195,21 +232,21 @@ class _LoginPageState extends State<LoginPage> {
     );
   }
 
-  Widget _buildNumBtn(String val) {
-    return InkWell(
-      onTap: () => _handlePinInput(val),
-      child: Container(
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: const Color(0xFF1F1D2B),
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Text(
-          val,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
+  Widget _buildNumBtn(String val, ThemeProvider theme) {
+    return Material(
+      color: theme.subtleColor,
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () => _handlePinInput(val),
+        child: Center(
+          child: Text(
+            val,
+            style: TextStyle(
+              color: theme.textColor,
+              fontSize: 22,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ),
       ),
