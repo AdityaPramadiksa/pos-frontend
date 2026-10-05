@@ -6,6 +6,7 @@ import '../services/api_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
 import '../utils/responsive.dart';
+import '../widgets/ui.dart';
 
 class PaymentPage extends StatefulWidget {
   final bool isFromBill; // Tambahkan baris ini
@@ -66,8 +67,8 @@ class _PaymentPageState extends State<PaymentPage> {
       ),
       title: Text(
         widget.isFromBill
-            ? "Pelunasan Bill"
-            : (mobile ? "Pembayaran" : "Confirmation & Payment"),
+            ? "Pelunasan bill"
+            : "Pembayaran",
         style: TextStyle(color: theme.textColor, fontWeight: FontWeight.bold),
       ),
       backgroundColor: theme.backgroundColor,
@@ -92,7 +93,7 @@ class _PaymentPageState extends State<PaymentPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _sectionTitle("Order Summary", theme, size: 18),
+                  _sectionTitle("Ringkasan pesanan", theme, size: 17),
                   const SizedBox(height: 12),
                   ...cart.items
                       .map((item) => _buildSummaryItem(item, cart, theme)),
@@ -135,7 +136,7 @@ class _PaymentPageState extends State<PaymentPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _sectionTitle("Order Summary", theme, size: 22),
+                  _sectionTitle("Ringkasan pesanan", theme, size: 20),
                   const SizedBox(height: 24),
                   Expanded(
                     child: ListView.builder(
@@ -198,7 +199,7 @@ class _PaymentPageState extends State<PaymentPage> {
       _priceRow("Subtotal", rupiah(cart.subtotalPrice), theme,
           compact: compact),
       _priceRow(
-        cart.isBill ? "Tax" : "Tax (${cart.taxPercentLabel}%)",
+        cart.isBill ? "Pajak PB1" : "Pajak PB1 ${cart.taxPercentLabel}%",
         rupiah(cart.taxAmount),
         theme,
         compact: compact,
@@ -206,11 +207,11 @@ class _PaymentPageState extends State<PaymentPage> {
       if (cart.discountAmount > 0)
         _priceRow(
           cart.selectedDiscount != null
-              ? "Discount (${cart.selectedDiscount!.name})"
-              : "Discount",
+              ? "Diskon (${cart.selectedDiscount!.name})"
+              : "Diskon",
           "- ${rupiah(cart.discountAmount)}",
           theme,
-          color: Colors.redAccent,
+          color: theme.dangerColor,
           compact: compact,
         ),
       _priceRow(
@@ -232,7 +233,7 @@ class _PaymentPageState extends State<PaymentPage> {
     final bool mobile = isMobile(context);
 
     return [
-      _sectionTitle("Customer Info", theme, size: mobile ? 18 : 20),
+      _sectionTitle("Pelanggan", theme, size: mobile ? 18 : 20),
       const SizedBox(height: 12),
       Container(
         width: double.infinity,
@@ -246,20 +247,20 @@ class _PaymentPageState extends State<PaymentPage> {
           spacing: 32,
           runSpacing: 12,
           children: [
-            _infoTile("Customer", cart.customerName, theme),
+            _infoTile("Nama", cart.customerName, theme),
             _infoTile(
-              "Table",
+              "Meja",
               cart.tableNumber.isEmpty ? "-" : cart.tableNumber,
               theme,
             ),
             _infoTile(
-              "Type",
-              cart.orderType.replaceAll('_', ' ').toUpperCase(),
+              "Jenis",
+              const {'dine_in': 'Makan di sini', 'to_go': 'Bungkus', 'delivery': 'Ojol'}[cart.orderType] ?? cart.orderType,
               theme,
             ),
             if (isDelivery)
               _infoTile(
-                "Platform",
+                "Aplikasi",
                 platformLabel(cart.deliveryPlatform),
                 theme,
               ),
@@ -267,7 +268,7 @@ class _PaymentPageState extends State<PaymentPage> {
         ),
       ),
       SizedBox(height: mobile ? 24 : 32),
-      _sectionTitle("Payment Method", theme, size: mobile ? 18 : 20),
+      _sectionTitle("Cara bayar", theme, size: mobile ? 18 : 20),
       const SizedBox(height: 12),
       Wrap(
         spacing: mobile ? 8 : 12,
@@ -282,12 +283,12 @@ class _PaymentPageState extends State<PaymentPage> {
               theme,
               label: cart.deliveryPlatform.isEmpty
                   ? "Platform"
-                  : cart.deliveryPlatform.toUpperCase(),
+                  : platformLabel(cart.deliveryPlatform),
             ),
-          _paymentOption(cart, "Cash", Icons.payments_outlined, theme),
-          _paymentOption(cart, "QRIS", Icons.qr_code_scanner, theme),
-          _paymentOption(cart, "Debit", Icons.credit_card, theme),
-          _paymentOption(cart, "Credit", Icons.credit_score, theme),
+          _paymentOption(cart, "cash", Icons.payments_outlined, theme, label: "Tunai"),
+          _paymentOption(cart, "qris", Icons.qr_code_2, theme, label: "QRIS"),
+          _paymentOption(cart, "debit", Icons.credit_card, theme, label: "Debit"),
+          _paymentOption(cart, "credit", Icons.credit_score, theme, label: "Kredit"),
         ],
       ),
       SizedBox(height: mobile ? 24 : 32),
@@ -295,7 +296,7 @@ class _PaymentPageState extends State<PaymentPage> {
       // TAMPILAN KHUSUS CASH
       if (cart.paymentMethod.toLowerCase() == "cash") ...[
         Text(
-          "Amount Received",
+          "Uang diterima",
           style: TextStyle(
             color: theme.secondaryTextColor,
             fontWeight: FontWeight.bold,
@@ -321,11 +322,11 @@ class _PaymentPageState extends State<PaymentPage> {
         ),
         const SizedBox(height: 20),
         _priceRow(
-          "Change",
+          "Kembalian",
           rupiah(change),
           theme,
           isBold: true,
-          color: Colors.greenAccent,
+          color: theme.successColor,
           compact: mobile,
         ),
       ],
@@ -364,11 +365,10 @@ class _PaymentPageState extends State<PaymentPage> {
                 ),
                 if (note.isNotEmpty)
                   Text(
-                    "* $note",
-                    style: const TextStyle(
-                      color: Colors.orangeAccent,
-                      fontSize: 11,
-                      fontStyle: FontStyle.italic,
+                    note,
+                    style: TextStyle(
+                      color: theme.warningColor,
+                      fontSize: 12,
                     ),
                   ),
               ],
@@ -431,7 +431,7 @@ class _PaymentPageState extends State<PaymentPage> {
         height: isMobile(context) ? 72 : 80,
         decoration: BoxDecoration(
           color: isSelected
-              ? theme.primaryColor.withAlpha(40)
+              ? theme.primarySoftColor
               : Colors.transparent,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
@@ -477,22 +477,22 @@ class _PaymentPageState extends State<PaymentPage> {
   Widget _exactBtn(int total, ThemeProvider theme) {
     return ElevatedButton(
       style: ElevatedButton.styleFrom(
-        backgroundColor: theme.primaryColor.withAlpha(40),
+        backgroundColor: theme.primarySoftColor,
         foregroundColor: theme.primaryColor,
       ),
       onPressed: () => setState(() => _amountReceived = total),
-      child: const Text("Uang Pas"),
+      child: const Text("Uang pas"),
     );
   }
 
   Widget _clearBtn(ThemeProvider theme) {
     return ElevatedButton(
       style: ElevatedButton.styleFrom(
-        backgroundColor: Colors.red.withAlpha(40),
-        foregroundColor: Colors.redAccent,
+        backgroundColor: theme.dangerSoftColor,
+        foregroundColor: theme.dangerColor,
       ),
       onPressed: () => setState(() => _amountReceived = 0),
-      child: const Text("Clear"),
+      child: const Text("Hapus"),
     );
   }
 
@@ -514,7 +514,7 @@ class _PaymentPageState extends State<PaymentPage> {
         child: _isProcessing
             ? const CircularProgressIndicator(color: Colors.white)
             : Text(
-                isShort ? "Uang Kurang" : "Confirm Payment",
+                isShort ? "Uang diterima kurang" : "Konfirmasi pembayaran",
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 18,
@@ -552,7 +552,7 @@ class _PaymentPageState extends State<PaymentPage> {
       }
 
       if (response['status'] != 'success') {
-        throw Exception(response['message'] ?? "Gagal memproses pembayaran");
+        throw Exception(response['message'] ?? "Pembayaran gagal diproses");
       }
 
       // Pembayaran sudah tercatat di server. Mulai dari sini kegagalan cetak
@@ -582,12 +582,8 @@ class _PaymentPageState extends State<PaymentPage> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+      showMessage(context, e.toString().replaceFirst('Exception: ', ''),
+          error: true);
     } finally {
       if (mounted) setState(() => _isProcessing = false);
     }
@@ -633,16 +629,16 @@ class _PaymentPageState extends State<PaymentPage> {
       builder: (context) => AlertDialog(
         backgroundColor: theme.cardColor,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Icon(
+        title: Icon(
           Icons.check_circle,
-          color: Colors.greenAccent,
+          color: theme.successColor,
           size: 80,
         ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              "Payment Successful!",
+              "Pembayaran berhasil",
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: theme.textColor,
@@ -653,20 +649,20 @@ class _PaymentPageState extends State<PaymentPage> {
             if (change != null) ...[
               const SizedBox(height: 12),
               Text(
-                "Kembalian: ${rupiah(change)}",
-                style: const TextStyle(
-                  color: Colors.greenAccent,
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
+                "Kembalian ${rupiah(change)}",
+                style: TextStyle(
+                  color: theme.textColor,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ],
             if (!printed) ...[
               const SizedBox(height: 12),
-              const Text(
-                "Struk tidak tercetak (printer belum terhubung).\nCetak ulang dari menu Riwayat.",
+              Text(
+                "Struk tidak tercetak karena printer belum terhubung. Cetak ulang dari menu Riwayat.",
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.orangeAccent, fontSize: 12),
+                style: TextStyle(color: theme.warningColor, fontSize: 12),
               ),
             ],
           ],
@@ -679,7 +675,7 @@ class _PaymentPageState extends State<PaymentPage> {
                 Navigator.pop(context);
               },
               child: Text(
-                "Back to Home",
+                widget.isFromBill ? "Kembali ke daftar bill" : "Kembali ke kasir",
                 style: TextStyle(
                   color: theme.primaryColor,
                   fontWeight: FontWeight.bold,

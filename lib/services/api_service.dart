@@ -10,7 +10,7 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 class ApiService {
 // 1. IP server (Laravel) bawaan. Bisa diganti dari halaman login (ikon gear)
 //    tanpa build ulang, mis. saat laptop pindah WiFi dan IP-nya berubah.
-  static const String defaultIpAddress = "192.168.43.67";
+  static const String defaultIpAddress = "192.168.18.8";
   static const String _serverPrefKey = 'server_address';
   static String ipAddress = defaultIpAddress;
 
@@ -59,10 +59,10 @@ class ApiService {
     try {
       final decoded = json.decode(response.body);
       if (decoded is Map<String, dynamic>) {
-        decoded['status'] ??= (response.statusCode >= 200 &&
-                response.statusCode < 300)
-            ? 'success'
-            : 'error';
+        decoded['status'] ??=
+            (response.statusCode >= 200 && response.statusCode < 300)
+                ? 'success'
+                : 'error';
         return decoded;
       }
     } catch (_) {}
@@ -75,8 +75,10 @@ class ApiService {
   // Pesan yang bisa dipahami kasir, bukan teks exception mentah
   String _connectionError(Object e) {
     final String text = e.toString();
-    if (text.contains('Timeout') || text.contains('SocketException') ||
-        text.contains('ClientException') || text.contains('Connection')) {
+    if (text.contains('Timeout') ||
+        text.contains('SocketException') ||
+        text.contains('ClientException') ||
+        text.contains('Connection')) {
       return 'Server tidak terjangkau ($ipAddress). Cek WiFi & alamat server di ikon gear halaman login.';
     }
     return 'Koneksi gagal: $text';
@@ -284,6 +286,24 @@ class ApiService {
       if (amountPaid != null) 'amount_paid': amountPaid,
     });
   }
+
+  // 12b. Tambah pesanan ke bill yang belum dibayar
+  Future<Map<String, dynamic>> addItemsToBill(
+      int orderId, List<dynamic> items) async {
+    return await _post('/orders/$orderId/items', {
+      "items": items
+          .map((item) => {
+                "menu_id": item.menu.id,
+                "qty": item.quantity,
+                "note": item.note,
+              })
+          .toList(),
+    });
+  }
+
+  // 12c. Ubah sisa stok menu dari kasir (0 = habis)
+  Future<Map<String, dynamic>> updateStock(int menuId, int stock) =>
+      _post('/menus/$menuId/stock', {'stock': stock});
 
   // 13. Petty Cash Add
   Future<Map<String, dynamic>> addExpense({

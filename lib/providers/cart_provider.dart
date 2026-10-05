@@ -36,6 +36,32 @@ class CartProvider with ChangeNotifier {
   // (pajak/diskon dihitung saat bill dibuat), bukan dihitung ulang di aplikasi.
   Map<String, int>? _billTotals;
 
+  // Mode "tambah pesanan ke bill": keranjang hanya berisi item tambahan
+  // untuk bill [appendOrderId] (mis. meja yang pesan lagi).
+  int? _appendOrderId;
+  String _appendLabel = "";
+  int? get appendOrderId => _appendOrderId;
+  String get appendLabel => _appendLabel;
+  bool get isAppending => _appendOrderId != null;
+
+  /// Mulai menambah pesanan ke bill yang belum dibayar
+  void startAppend(Map<String, dynamic> bill) {
+    clearCart();
+    _appendOrderId = bill['id'];
+    _orderType = (bill['order_type'] ?? 'dine_in').toString();
+    _deliveryPlatform = bill['delivery_platform']?.toString() ?? "";
+    _tableNumber = bill['table_number']?.toString() ?? "";
+    _customerName = bill['customer_name']?.toString() ?? "Pelanggan Umum";
+    final String table = _tableNumber.isEmpty || _tableNumber == '-'
+        ? ''
+        : 'Meja $_tableNumber';
+    _appendLabel = [table, if (_customerName != 'Pelanggan Umum') _customerName]
+        .where((s) => s.isNotEmpty)
+        .join(' · ');
+    if (_appendLabel.isEmpty) _appendLabel = bill['receipt_number'] ?? 'bill';
+    notifyListeners();
+  }
+
   // --- GETTER ---
   List<CartItem> get items => _items;
   String get customerName => _customerName;
@@ -97,6 +123,8 @@ class CartProvider with ChangeNotifier {
     _selectedDiscount = null;
     _currentOrderId = null;
     _billTotals = null;
+    _appendOrderId = null;
+    _appendLabel = "";
     _customerName = "Pelanggan Umum";
     _tableNumber = "";
     _orderType = 'dine_in';

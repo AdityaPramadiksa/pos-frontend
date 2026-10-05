@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
 import '../utils/formatters.dart';
 import '../utils/responsive.dart';
+import '../widgets/ui.dart';
 
 class PettyCashPage extends StatefulWidget {
   const PettyCashPage({super.key});
@@ -22,361 +25,269 @@ class _PettyCashPageState extends State<PettyCashPage> {
   final ImagePicker _picker = ImagePicker();
   bool _isLoading = false;
 
-  // List untuk menampung history pengeluaran
   List<dynamic> _historyExpenses = [];
 
   @override
   void initState() {
     super.initState();
-    _fetchHistory(); // Ambil data saat halaman dibuka
+    _fetchHistory();
   }
 
-  // Fungsi ambil history dari API
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _descController.dispose();
+    super.dispose();
+  }
+
   Future<void> _fetchHistory() async {
-    try {
-      final res = await _apiService.getExpenses();
-      if (!mounted) return;
-      if (res['status'] == 'success') {
-        setState(() {
-          _historyExpenses = res['data'] ?? [];
-        });
-      }
-    } catch (e) {
-      debugPrint("Gagal ambil history: $e");
+    final res = await _apiService.getExpenses();
+    if (!mounted) return;
+    if (res['status'] == 'success') {
+      setState(() => _historyExpenses = res['data'] ?? []);
     }
   }
 
   Future<void> _pickImage(ImageSource source) async {
     try {
-      final pickedFile = await _picker.pickImage(
-        source: source,
-        imageQuality: 70,
-      );
-      if (pickedFile != null) {
-        setState(() {
-          _imageFile = pickedFile;
-        });
-      }
+      final pickedFile =
+          await _picker.pickImage(source: source, imageQuality: 70);
+      if (pickedFile != null) setState(() => _imageFile = pickedFile);
     } catch (e) {
-      debugPrint("Gagal ambil foto: $e");
+      if (mounted) showMessage(context, "Foto tidak bisa diambil: $e", error: true);
     }
-  }
-
-  // --- POPUP SUKSES ---
-  void _showSuccessDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        final theme = Provider.of<ThemeProvider>(context);
-        return Dialog(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20),
-          ),
-          backgroundColor: theme.cardColor,
-          child: Padding(
-            padding: EdgeInsets.all(isMobile(context) ? 16 : 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.check_circle, color: Colors.green, size: 80),
-                const SizedBox(height: 20),
-                Text(
-                  "Berhasil Dicatat!",
-                  style: TextStyle(
-                    color: theme.textColor,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  "Data pengeluaran sudah masuk ke laporan.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: theme.secondaryTextColor),
-                ),
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: theme.primaryColor,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    onPressed: () {
-                      Navigator.pop(context); // Tutup dialog
-                      _fetchHistory(); // Refresh list bawah
-                    },
-                    child: const Text(
-                      "OK",
-                      style: TextStyle(color: Colors.white),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
   }
 
   Future<void> _submitExpense() async {
-    if (_amountController.text.isEmpty || _descController.text.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Nominal dan Keterangan wajib diisi!"),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
-      return;
-    }
-
-    int amount = int.tryParse(
-          _amountController.text.replaceAll(RegExp(r'[^0-9]'), ''),
-        ) ??
-        0;
-
-    if (amount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Nominal harus lebih dari 0!"),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
+    final int amount = int.tryParse(_amountController.text) ?? 0;
+    if (amount <= 0 || _descController.text.trim().isEmpty) {
+      showMessage(context, "Isi jumlah dan keterangan dulu.", error: true);
       return;
     }
 
     setState(() => _isLoading = true);
-
     final res = await _apiService.addExpense(
       amount: amount,
-      description: _descController.text,
+      description: _descController.text.trim(),
       imageFile: _imageFile,
     );
-
     if (!mounted) return;
     setState(() => _isLoading = false);
 
     if (res['status'] == 'success') {
-      // Bersihkan form
       _amountController.clear();
       _descController.clear();
       setState(() => _imageFile = null);
-
-      // Tampilkan Popup Sukses
-      _showSuccessDialog();
+      FocusScope.of(context).unfocus();
+      showMessage(context, "Pengeluaran ${rupiah(amount)} dicatat.",
+          success: true);
+      _fetchHistory();
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(res['message'] ?? "Gagal menyimpan"),
-          backgroundColor: Colors.red,
-        ),
-      );
+      showMessage(context, res['message'] ?? "Pengeluaran gagal dicatat.",
+          error: true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Provider.of<ThemeProvider>(context);
+    final bool mobile = isMobile(context);
+    final int total =
+        _historyExpenses.fold(0, (sum, e) => sum + toInt(e['amount']));
 
-    return Scaffold(
-      backgroundColor: theme.backgroundColor,
-      appBar: AppBar(
-        backgroundColor: theme.backgroundColor,
-        elevation: 0,
-        // Halaman ini adalah tab di sidebar, bukan halaman yang di-push,
-        // jadi tidak ada tombol kembali (pop akan menutup seluruh layout).
-        automaticallyImplyLeading: false,
-        title: Text(
-          "Petty Cash / Kas Keluar",
-          style: TextStyle(color: theme.textColor, fontWeight: FontWeight.bold),
-        ),
-      ),
-      body: SingleChildScrollView(
-        padding: EdgeInsets.all(isMobile(context) ? 16 : 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // --- FORM INPUT ---
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: theme.cardColor,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: theme.borderColor),
+    final form = Panel(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text("Catat pengeluaran",
+              style: TextStyle(
+                  color: theme.textColor,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Text("Uang yang diambil dari laci, misalnya untuk beli es batu atau gas.",
+              style: TextStyle(color: theme.secondaryTextColor, fontSize: 13)),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _amountController,
+            keyboardType: TextInputType.number,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            style: TextStyle(
+                color: theme.textColor,
+                fontSize: 20,
+                fontWeight: FontWeight.w700),
+            decoration: const InputDecoration(
+              labelText: "Jumlah",
+              prefixText: "Rp ",
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _descController,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: const InputDecoration(
+              labelText: "Keterangan",
+              hintText: "Contoh: beli es batu 2 karung",
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _pickImage(ImageSource.camera),
+                  icon: const Icon(Icons.photo_camera_outlined, size: 18),
+                  label: const Text("Foto nota"),
+                ),
               ),
-              child: Column(
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => _pickImage(ImageSource.gallery),
+                  icon: const Icon(Icons.photo_library_outlined, size: 18),
+                  label: const Text("Dari galeri"),
+                ),
+              ),
+            ],
+          ),
+          if (_imageFile != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(
                 children: [
-                  TextField(
-                    controller: _amountController,
-                    keyboardType: TextInputType.number,
-                    style: TextStyle(
-                      color: theme.textColor,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    decoration: InputDecoration(
-                      labelText: "Nominal (Rp)",
-                      prefixIcon: Icon(Icons.money, color: theme.primaryColor),
-                    ),
+                  Icon(Icons.check_circle, color: theme.successColor, size: 18),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text("Foto nota terlampir: ${_imageFile!.name}",
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: theme.secondaryTextColor)),
                   ),
-                  const SizedBox(height: 15),
-                  TextField(
-                    controller: _descController,
-                    style: TextStyle(color: theme.textColor),
-                    decoration: InputDecoration(
-                      labelText: "Keterangan",
-                      prefixIcon: Icon(Icons.notes, color: theme.primaryColor),
-                    ),
+                  IconButton(
+                    tooltip: "Hapus foto",
+                    onPressed: () => setState(() => _imageFile = null),
+                    icon: Icon(Icons.close, size: 18, color: theme.dangerColor),
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 20),
-
-            // --- TOMBOL KAMERA & GALERI ---
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _pickImage(ImageSource.camera),
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text("Kamera"),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () => _pickImage(ImageSource.gallery),
-                    icon: const Icon(Icons.photo_library),
-                    label: const Text("Galeri"),
-                  ),
-                ),
-              ],
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 48,
+            child: ElevatedButton(
+              onPressed: _isLoading ? null : _submitExpense,
+              child: _isLoading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white))
+                  : const Text("Simpan pengeluaran"),
             ),
+          ),
+        ],
+      ),
+    );
 
-            if (_imageFile != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Row(
-                  children: [
-                    const Icon(Icons.check_circle,
-                        color: Colors.green, size: 18),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        "Foto nota terlampir: ${_imageFile!.name}",
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: theme.secondaryTextColor),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => setState(() => _imageFile = null),
-                      icon: const Icon(Icons.close,
-                          color: Colors.redAccent, size: 18),
-                    ),
-                  ],
-                ),
+    final history = Panel(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text("Pengeluaran shift ini",
+                    style: TextStyle(
+                        color: theme.textColor,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600)),
               ),
-
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton(
-                onPressed: _isLoading ? null : _submitExpense,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: theme.primaryColor,
-                ),
-                child: _isLoading
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text(
-                        "SIMPAN",
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-              ),
-            ),
-
-            const SizedBox(height: 40),
-
-            // --- HISTORY SECTION ---
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  "Pengeluaran Shift Ini",
+              Text(rupiah(total),
                   style: TextStyle(
-                    color: theme.textColor,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                Text(
-                  "Total: - ${rupiah(_historyExpenses.fold<int>(0, (sum, e) => sum + toInt(e['amount'])))}",
-                  style: const TextStyle(
-                    color: Colors.red,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ],
+                      color: theme.textColor, fontWeight: FontWeight.w700)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (_historyExpenses.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Text("Belum ada pengeluaran di shift ini.",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: theme.secondaryTextColor)),
             ),
-            const SizedBox(height: 15),
-            _historyExpenses.isEmpty
-                ? Center(
-                    child: Text(
-                      "Belum ada pengeluaran di shift ini",
-                      style: TextStyle(color: theme.secondaryTextColor),
-                    ),
-                  )
-                : ListView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    itemCount: _historyExpenses.length,
-                    itemBuilder: (context, index) {
-                      final item = _historyExpenses[index];
-                      return Card(
-                        color: theme.cardColor,
-                        margin: const EdgeInsets.only(bottom: 10),
-                        child: ListTile(
-                          leading: CircleAvatar(
-                            backgroundColor: Colors.red.withOpacity(0.1),
-                            child: const Icon(
-                              Icons.arrow_downward,
-                              color: Colors.red,
-                              size: 20,
-                            ),
-                          ),
-                          title: Text(
-                            item['description'] ?? "",
-                            style: TextStyle(
-                              color: theme.textColor,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          subtitle: Text(
-                            item['created_at']?.split('T')[0] ?? "",
-                            style: TextStyle(
-                              color: theme.secondaryTextColor,
-                              fontSize: 12,
-                            ),
-                          ),
-                          trailing: Text(
-                            "- ${rupiah(item['amount'])}",
-                            style: const TextStyle(
-                              color: Colors.red,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+          for (final item in _historyExpenses)
+            Container(
+              padding: const EdgeInsets.symmetric(vertical: 10),
+              decoration: BoxDecoration(
+                border: Border(top: BorderSide(color: theme.subtleColor)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(item['description'] ?? "",
+                            style: TextStyle(color: theme.textColor)),
+                        Text(
+                          [
+                            () {
+                              final t = DateTime.tryParse(
+                                      item['created_at']?.toString() ?? '')
+                                  ?.toLocal();
+                              return t == null
+                                  ? ''
+                                  : DateFormat('HH:mm').format(t);
+                            }(),
+                            if (item['receipt_image'] != null) 'ada foto nota',
+                          ].where((s) => s.isNotEmpty).join(' · '),
+                          style: TextStyle(
+                              color: theme.secondaryTextColor, fontSize: 12),
                         ),
-                      );
-                    },
+                      ],
+                    ),
                   ),
+                  Text("− ${rupiah(item['amount'])}",
+                      style: TextStyle(
+                        color: theme.textColor,
+                        fontWeight: FontWeight.w600,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      )),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+
+    return Scaffold(
+      backgroundColor: theme.backgroundColor,
+      body: RefreshIndicator(
+        onRefresh: _fetchHistory,
+        color: theme.primaryColor,
+        child: ListView(
+          padding: EdgeInsets.fromLTRB(
+              mobile ? 16 : 32, mobile ? 16 : 28, mobile ? 16 : 32, 24),
+          children: [
+            PageHeader(
+              title: "Kas keluar",
+              subtitle: "Dikurangkan dari uang tunai saat tutup shift",
+              compact: mobile,
+            ),
+            SizedBox(height: mobile ? 16 : 24),
+            if (mobile) ...[
+              form,
+              const SizedBox(height: 16),
+              history,
+            ] else
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: form),
+                  const SizedBox(width: 24),
+                  Expanded(child: history),
+                ],
+              ),
           ],
         ),
       ),
