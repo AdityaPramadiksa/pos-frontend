@@ -5,6 +5,7 @@ import '../providers/cart_provider.dart';
 import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
 import '../services/printer_service.dart';
+import '../utils/responsive.dart';
 import 'home_page.dart';
 import 'login_page.dart';
 import 'order_history_page.dart';
@@ -102,9 +103,147 @@ class _MainLayoutState extends State<MainLayout> {
     );
   }
 
+  // --- NAVIGASI VERSI HP ---
+  // Bar bawah: Kasir, Bills, Riwayat, Rekap, Lainnya (Kas Keluar, Printer, Keluar)
+  static const List<int> _bottomNavPages = [0, 1, 2, 4];
+
+  int get _bottomNavIndex {
+    final int index = _bottomNavPages.indexOf(_selectedIndex);
+    return index >= 0 ? index : _bottomNavPages.length;
+  }
+
+  void _showMoreMenu(ThemeProvider theme) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: theme.cardColor,
+      useSafeArea: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) {
+        Widget item(IconData icon, String label, VoidCallback onTap,
+            {Color? color, bool active = false}) {
+          return ListTile(
+            leading: Icon(icon,
+                color: color ??
+                    (active ? theme.primaryColor : theme.secondaryTextColor)),
+            title: Text(label,
+                style: TextStyle(
+                    color: color ?? theme.textColor,
+                    fontWeight: active ? FontWeight.bold : FontWeight.normal)),
+            trailing: active
+                ? Icon(Icons.check, color: theme.primaryColor, size: 18)
+                : null,
+            onTap: () {
+              Navigator.pop(sheetContext);
+              onTap();
+            },
+          );
+        }
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: theme.borderColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              if (_cashierName.isNotEmpty)
+                ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: theme.primaryColor.withAlpha(40),
+                    child: Icon(Icons.person, color: theme.primaryColor),
+                  ),
+                  title: Text(_cashierName,
+                      style: TextStyle(
+                          color: theme.textColor, fontWeight: FontWeight.bold)),
+                  subtitle: Text("Kasir yang sedang bertugas",
+                      style: TextStyle(color: theme.secondaryTextColor)),
+                ),
+              Divider(color: theme.borderColor),
+              item(Icons.account_balance_wallet_outlined, "Kas Keluar",
+                  () => setState(() => _selectedIndex = 3),
+                  active: _selectedIndex == 3),
+              item(Icons.print_outlined, "Printer",
+                  () => setState(() => _selectedIndex = 5),
+                  active: _selectedIndex == 5),
+              item(Icons.logout, "Keluar", () => _confirmLogout(theme),
+                  color: Colors.redAccent),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildBottomNav(ThemeProvider theme) {
+    return NavigationBarTheme(
+      data: NavigationBarThemeData(
+        backgroundColor: theme.cardColor,
+        indicatorColor: theme.primaryColor,
+        height: 68,
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (states) => TextStyle(
+            fontSize: 11,
+            fontWeight: states.contains(WidgetState.selected)
+                ? FontWeight.bold
+                : FontWeight.normal,
+            color: states.contains(WidgetState.selected)
+                ? theme.primaryColor
+                : theme.secondaryTextColor,
+          ),
+        ),
+        iconTheme: WidgetStateProperty.resolveWith(
+          (states) => IconThemeData(
+            color: states.contains(WidgetState.selected)
+                ? Colors.white
+                : theme.secondaryTextColor,
+          ),
+        ),
+      ),
+      child: NavigationBar(
+        selectedIndex: _bottomNavIndex,
+        onDestinationSelected: (index) {
+          if (index == _bottomNavPages.length) {
+            _showMoreMenu(theme);
+          } else {
+            setState(() => _selectedIndex = _bottomNavPages[index]);
+          }
+        },
+        destinations: const [
+          NavigationDestination(
+              icon: Icon(Icons.grid_view_rounded), label: "Kasir"),
+          NavigationDestination(
+              icon: Icon(Icons.receipt_long_rounded), label: "Bills"),
+          NavigationDestination(
+              icon: Icon(Icons.history_rounded), label: "Riwayat"),
+          NavigationDestination(
+              icon: Icon(Icons.analytics_outlined), label: "Rekap"),
+          NavigationDestination(
+              icon: Icon(Icons.more_horiz_rounded), label: "Lainnya"),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Provider.of<ThemeProvider>(context);
+
+    if (isMobile(context)) {
+      return Scaffold(
+        backgroundColor: theme.backgroundColor,
+        body: SafeArea(bottom: false, child: _pages[_selectedIndex]),
+        bottomNavigationBar: _buildBottomNav(theme),
+      );
+    }
 
     return Scaffold(
       backgroundColor: theme.backgroundColor,

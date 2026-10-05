@@ -9,6 +9,7 @@ import '../models/discount_model.dart';
 import '../services/api_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
+import '../utils/responsive.dart';
 import 'payment_page.dart';
 
 class HomePage extends StatefulWidget {
@@ -24,6 +25,10 @@ class _HomePageState extends State<HomePage> {
     text: "Pelanggan Umum",
   );
   final TextEditingController _tableController = TextEditingController();
+  final TextEditingController _searchController = TextEditingController();
+
+  // Konteks lembar pesanan versi HP selagi terbuka (untuk snackbar & menutupnya)
+  BuildContext? _sheetContext;
 
   List<CategoryModel> _categories = [];
   List<MenuModel> _allMenus = [];
@@ -49,6 +54,7 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     _nameController.dispose();
     _tableController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -61,7 +67,11 @@ class _HomePageState extends State<HomePage> {
 
   void _showSnack(String message, {Color color = Colors.redAccent}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
+    final BuildContext target =
+        (_sheetContext != null && _sheetContext!.mounted)
+            ? _sheetContext!
+            : context;
+    ScaffoldMessenger.of(target).showSnackBar(
       SnackBar(
         content: Text(message),
         backgroundColor: color,
@@ -243,6 +253,8 @@ class _HomePageState extends State<HomePage> {
     final cart = Provider.of<CartProvider>(context);
     final theme = Provider.of<ThemeProvider>(context);
 
+    if (isMobile(context)) return _buildMobile(cart, theme);
+
     return Scaffold(
       backgroundColor: theme.backgroundColor,
       body: Row(
@@ -267,13 +279,7 @@ class _HomePageState extends State<HomePage> {
                         fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 20),
-                  Expanded(
-                    child: _isLoading
-                        ? Center(
-                            child: CircularProgressIndicator(
-                                color: theme.primaryColor))
-                        : _buildMenuGrid(cart, theme),
-                  ),
+                  Expanded(child: _menuArea(cart, theme)),
                 ],
               ),
             ),
@@ -289,6 +295,224 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Widget _menuArea(CartProvider cart, ThemeProvider theme) {
+    if (_isLoading) {
+      return Center(child: CircularProgressIndicator(color: theme.primaryColor));
+    }
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: theme.primaryColor,
+      child: _buildMenuGrid(cart, theme),
+    );
+  }
+
+  // --- VERSI HP: menu satu layar penuh, keranjang di lembar bawah ---
+  Widget _buildMobile(CartProvider cart, ThemeProvider theme) {
+    final int itemCount = cart.items.fold(0, (sum, item) => sum + item.quantity);
+
+    return Scaffold(
+      backgroundColor: theme.backgroundColor,
+      body: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+            child: _buildMobileHeader(theme),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: _buildCategoryTabs(theme),
+          ),
+          const SizedBox(height: 12),
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _menuArea(cart, theme),
+            ),
+          ),
+        ],
+      ),
+      bottomNavigationBar: cart.items.isEmpty
+          ? null
+          : _buildMobileCartBar(cart, theme, itemCount),
+    );
+  }
+
+  Widget _buildMobileHeader(ThemeProvider theme) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "Babi Guling POS",
+          style: TextStyle(
+            color: theme.textColor,
+            fontSize: 22,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        Text(
+          DateFormat('EEEE, d MMM yyyy').format(DateTime.now()),
+          style: TextStyle(color: theme.secondaryTextColor, fontSize: 13),
+        ),
+        const SizedBox(height: 12),
+        _searchField(theme),
+      ],
+    );
+  }
+
+  Widget _buildMobileCartBar(
+      CartProvider cart, ThemeProvider theme, int itemCount) {
+    return Container(
+      color: theme.backgroundColor,
+      child: SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+        child: Material(
+          color: theme.primaryColor,
+          borderRadius: BorderRadius.circular(16),
+          elevation: 6,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: _openMobileCart,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withAlpha(40),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.shopping_bag_outlined,
+                        color: Colors.white, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          "$itemCount item",
+                          style: const TextStyle(
+                              color: Colors.white70, fontSize: 12),
+                        ),
+                        Text(
+                          rupiah(cart.totalPrice),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Text(
+                    "Lihat Pesanan",
+                    style: TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                  const Icon(Icons.chevron_right, color: Colors.white),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+      ),
+    );
+  }
+
+  // Lembar pesanan (HP). Punya ScaffoldMessenger sendiri supaya pesan
+  // seperti "Isi nomor meja!" tampil di atas lembar, bukan tertutup.
+  void _openMobileCart() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return FractionallySizedBox(
+          heightFactor: 0.92,
+          child: ClipRRect(
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+            child: ScaffoldMessenger(
+              child: Consumer2<CartProvider, ThemeProvider>(
+                builder: (_, cart, theme, __) => Scaffold(
+                  backgroundColor: theme.cardColor,
+                  body: Builder(builder: (ctx) {
+                    _sheetContext = ctx;
+                    return ListView(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                      children: [
+                        Center(
+                          child: Container(
+                            width: 40,
+                            height: 4,
+                            margin: const EdgeInsets.only(bottom: 8),
+                            decoration: BoxDecoration(
+                              color: theme.borderColor,
+                              borderRadius: BorderRadius.circular(2),
+                            ),
+                          ),
+                        ),
+                        ..._orderHeader(
+                          cart,
+                          theme,
+                          trailing: IconButton(
+                            onPressed: _closeMobileCart,
+                            icon: Icon(Icons.close,
+                                color: theme.secondaryTextColor),
+                          ),
+                        ),
+                        Divider(color: theme.borderColor, height: 30),
+                        if (cart.items.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 40),
+                            child: Center(
+                              child: Text("Keranjang kosong",
+                                  style: TextStyle(
+                                      color: theme.secondaryTextColor)),
+                            ),
+                          )
+                        else
+                          ...cart.items
+                              .map((item) => _buildCartItem(item, cart, theme)),
+                      ],
+                    );
+                  }),
+                  bottomNavigationBar: SafeArea(
+                    top: false,
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                      decoration: BoxDecoration(
+                        border:
+                            Border(top: BorderSide(color: theme.borderColor)),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: _orderFooter(cart, theme),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    ).whenComplete(() => _sheetContext = null);
+  }
+
+  void _closeMobileCart() {
+    final ctx = _sheetContext;
+    _sheetContext = null;
+    if (ctx != null && ctx.mounted) Navigator.pop(ctx);
+  }
+
   Widget _buildOrderSidebar(CartProvider cart, ThemeProvider theme) {
     return Container(
       // Kita hapus width: 400 agar dia mengikuti jatah flex dari Expanded di atas
@@ -300,55 +524,7 @@ class _HomePageState extends State<HomePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            "Current Order",
-            style: TextStyle(
-                color: theme.textColor,
-                fontSize: 22,
-                fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 20),
-
-          // 1. INPUT NAMA & MEJA
-          Row(
-            children: [
-              Expanded(
-                child: _sidebarInput(_nameController, "Customer",
-                    Icons.person_outline, theme, cart),
-              ),
-              if (cart.orderType == 'dine_in') ...[
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _sidebarInput(_tableController, "Table",
-                      Icons.table_restaurant_outlined, theme, cart),
-                ),
-              ],
-            ],
-          ),
-          const SizedBox(height: 16),
-
-          // 2. TOMBOL TIPE ORDER (Bungkus Expanded biar GAK OVERFLOW)
-          Row(
-            children: [
-              Expanded(child: _typeBtn(cart, "Dine In", "dine_in", theme)),
-              const SizedBox(width: 4),
-              Expanded(child: _typeBtn(cart, "To Go", "to_go", theme)),
-              const SizedBox(width: 4),
-              Expanded(child: _deliveryBtn(cart, theme)),
-            ],
-          ),
-
-          if (cart.orderType == 'delivery')
-            Padding(
-              padding: const EdgeInsets.only(top: 8.0),
-              child: Text(
-                "Platform: ${cart.deliveryPlatform.toUpperCase()}",
-                style: TextStyle(
-                    color: theme.primaryColor,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 11),
-              ),
-            ),
+          ..._orderHeader(cart, theme),
 
           const Divider(color: Color(0xFF393C49), height: 30),
 
@@ -368,119 +544,181 @@ class _HomePageState extends State<HomePage> {
 
           const Divider(color: Color(0xFF393C49), height: 30),
 
-          // 4. RINGKASAN HARGA
-          _priceRow("Subtotal", rupiah(cart.subtotalPrice), theme),
-          _priceRow(
-              "Tax (${cart.taxPercentLabel}%)", rupiah(cart.taxAmount), theme),
+          ..._orderFooter(cart, theme),
+        ],
+      ),
+    );
+  }
 
-          GestureDetector(
-            onTap: () => _showDiscountPicker(cart, theme),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(cart.selectedDiscount?.name ?? "Add Discount",
-                    style: TextStyle(
-                        color: theme.primaryColor,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13)),
-                if (cart.selectedDiscount == null)
-                  Icon(Icons.arrow_forward_ios,
-                      color: theme.primaryColor, size: 12)
-                else
-                  Row(
-                    children: [
-                      Text("- ${rupiah(cart.discountAmount)}",
-                          style: const TextStyle(color: Colors.redAccent)),
-                      const SizedBox(width: 8),
-                      // Hapus diskon yang sudah dipilih
-                      GestureDetector(
-                        onTap: () => cart.setDiscount(null),
-                        child: const Icon(Icons.close,
-                            color: Colors.redAccent, size: 16),
-                      ),
-                    ],
-                  ),
-              ],
+  // 1-2. Judul, input nama & meja, tipe order
+  List<Widget> _orderHeader(CartProvider cart, ThemeProvider theme,
+      {Widget? trailing}) {
+    return [
+      Row(
+        children: [
+          Expanded(
+            child: Text(
+              "Current Order",
+              style: TextStyle(
+                  color: theme.textColor,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold),
             ),
           ),
+          if (trailing != null) trailing,
+        ],
+      ),
+      const SizedBox(height: 16),
 
-          const SizedBox(height: 10),
-          _priceRow("Total", rupiah(cart.totalPrice), theme,
-              isBold: true, color: theme.primaryColor),
-          const SizedBox(height: 15),
-
-          // 5. TOMBOL ACTIONS
-          if (cart.items.isNotEmpty) ...[
-            if (cart.orderType == 'dine_in') ...[
-              SizedBox(
-                width: double.infinity,
-                height: 45,
-                child: OutlinedButton(
-                  onPressed: _isSavingBill
-                      ? null
-                      : () => _handleSaveAsBill(cart),
-                  style: OutlinedButton.styleFrom(
-                    side: BorderSide(color: theme.primaryColor),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
-                  ),
-                  child: Text("Save as Bill",
-                      style: TextStyle(
-                          color: theme.primaryColor,
-                          fontWeight: FontWeight.bold)),
-                ),
-              ),
-              const SizedBox(height: 10),
-            ],
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton(
-                onPressed: () async {
-                  if (cart.orderType == 'dine_in' &&
-                      _tableController.text.isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text("Isi nomor meja!")));
-                    return;
-                  }
-
-                  if (cart.orderType == 'delivery' &&
-                      cart.deliveryPlatform.isEmpty) {
-                    _showDeliveryPicker(cart, theme);
-                    return;
-                  }
-
-                  // A. Set info customer ke provider
-                  cart.setCustomerInfo(
-                      _nameController.text, _tableController.text);
-
-                  // B. Pindah ke halaman pembayaran. Ceker dapur dicetak di sana
-                  //    setelah pembayaran berhasil, supaya tidak tercetak dobel
-                  //    kalau kasir bolak-balik ke halaman ini.
-                  await Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                          builder: (context) => const PaymentPage()));
-
-                  // C. Sinkronkan input & stok setelah kembali dari pembayaran
-                  if (!mounted) return;
-                  _syncInputsFromCart();
-                  _loadData();
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: theme.primaryColor,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12)),
-                ),
-                child: const Text("Confirm Payment",
-                    style: TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
+      // 1. INPUT NAMA & MEJA
+      Row(
+        children: [
+          Expanded(
+            child: _sidebarInput(
+                _nameController, "Customer", Icons.person_outline, theme, cart),
+          ),
+          if (cart.orderType == 'dine_in') ...[
+            const SizedBox(width: 8),
+            Expanded(
+              child: _sidebarInput(_tableController, "Table",
+                  Icons.table_restaurant_outlined, theme, cart),
             ),
           ],
         ],
       ),
-    );
+      const SizedBox(height: 16),
+
+      // 2. TOMBOL TIPE ORDER (Bungkus Expanded biar GAK OVERFLOW)
+      Row(
+        children: [
+          Expanded(child: _typeBtn(cart, "Dine In", "dine_in", theme)),
+          const SizedBox(width: 4),
+          Expanded(child: _typeBtn(cart, "To Go", "to_go", theme)),
+          const SizedBox(width: 4),
+          Expanded(child: _deliveryBtn(cart, theme)),
+        ],
+      ),
+
+      if (cart.orderType == 'delivery')
+        Padding(
+          padding: const EdgeInsets.only(top: 8.0),
+          child: Text(
+            "Platform: ${cart.deliveryPlatform.toUpperCase()}",
+            style: TextStyle(
+                color: theme.primaryColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 11),
+          ),
+        ),
+    ];
+  }
+
+  // 4-5. Ringkasan harga & tombol aksi
+  List<Widget> _orderFooter(CartProvider cart, ThemeProvider theme) {
+    return [
+      // 4. RINGKASAN HARGA
+      _priceRow("Subtotal", rupiah(cart.subtotalPrice), theme),
+      _priceRow("Tax (${cart.taxPercentLabel}%)", rupiah(cart.taxAmount), theme),
+
+      GestureDetector(
+        onTap: () => _showDiscountPicker(cart, theme),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(cart.selectedDiscount?.name ?? "Add Discount",
+                style: TextStyle(
+                    color: theme.primaryColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13)),
+            if (cart.selectedDiscount == null)
+              Icon(Icons.arrow_forward_ios, color: theme.primaryColor, size: 12)
+            else
+              Row(
+                children: [
+                  Text("- ${rupiah(cart.discountAmount)}",
+                      style: const TextStyle(color: Colors.redAccent)),
+                  const SizedBox(width: 8),
+                  // Hapus diskon yang sudah dipilih
+                  GestureDetector(
+                    onTap: () => cart.setDiscount(null),
+                    child: const Icon(Icons.close,
+                        color: Colors.redAccent, size: 16),
+                  ),
+                ],
+              ),
+          ],
+        ),
+      ),
+
+      const SizedBox(height: 10),
+      _priceRow("Total", rupiah(cart.totalPrice), theme,
+          isBold: true, color: theme.primaryColor),
+      const SizedBox(height: 15),
+
+      // 5. TOMBOL ACTIONS
+      if (cart.items.isNotEmpty) ...[
+        if (cart.orderType == 'dine_in') ...[
+          SizedBox(
+            width: double.infinity,
+            height: 45,
+            child: OutlinedButton(
+              onPressed: _isSavingBill ? null : () => _handleSaveAsBill(cart),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: theme.primaryColor),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+              child: Text("Save as Bill",
+                  style: TextStyle(
+                      color: theme.primaryColor, fontWeight: FontWeight.bold)),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        SizedBox(
+          width: double.infinity,
+          height: 50,
+          child: ElevatedButton(
+            onPressed: () async {
+              if (cart.orderType == 'dine_in' &&
+                  _tableController.text.trim().isEmpty) {
+                _showSnack("Isi nomor meja!");
+                return;
+              }
+
+              if (cart.orderType == 'delivery' &&
+                  cart.deliveryPlatform.isEmpty) {
+                _showDeliveryPicker(cart, theme);
+                return;
+              }
+
+              // A. Set info customer ke provider
+              cart.setCustomerInfo(_nameController.text, _tableController.text);
+
+              // B. Pindah ke halaman pembayaran. Ceker dapur dicetak di sana
+              //    setelah pembayaran berhasil, supaya tidak tercetak dobel
+              //    kalau kasir bolak-balik ke halaman ini.
+              _closeMobileCart();
+              await Navigator.push(context,
+                  MaterialPageRoute(builder: (context) => const PaymentPage()));
+
+              // C. Sinkronkan input & stok setelah kembali dari pembayaran
+              if (!mounted) return;
+              _syncInputsFromCart();
+              _loadData();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: theme.primaryColor,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            child: const Text("Confirm Payment",
+                style: TextStyle(
+                    color: Colors.white, fontWeight: FontWeight.bold)),
+          ),
+        ),
+      ],
+    ];
   }
 
   Widget _deliveryBtn(CartProvider cart, ThemeProvider theme) {
@@ -549,8 +787,101 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  // HP: nama menu utuh di baris atas, tombol qty/catatan/hapus di baris bawah
+  Widget _buildMobileCartItem(
+      CartItem item, CartProvider cart, ThemeProvider theme) {
+    final String note = item.note ?? "";
+
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        border: Border(
+            bottom: BorderSide(color: theme.borderColor.withAlpha(120))),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  item.menu.name,
+                  style: TextStyle(
+                    color: theme.textColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                rupiah(cart.priceOf(item.menu) * item.quantity),
+                style: TextStyle(
+                  color: theme.textColor,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+          Text(
+            "@ ${rupiah(cart.priceOf(item.menu))}",
+            style: TextStyle(color: theme.secondaryTextColor, fontSize: 12),
+          ),
+          if (note.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                "* $note",
+                style: const TextStyle(
+                  color: Colors.orangeAccent,
+                  fontSize: 12,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              _qtyBtn(Icons.remove, theme,
+                  () => cart.decreaseQuantity(item.menu.id)),
+              SizedBox(
+                width: 36,
+                child: Text(
+                  "${item.quantity}",
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                      color: theme.textColor,
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold),
+                ),
+              ),
+              _qtyBtn(Icons.add, theme, () => _addMenu(cart, item.menu)),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: () => _showNoteDialog(item, cart, theme),
+                icon: Icon(Icons.edit_note, color: theme.primaryColor, size: 20),
+                label: Text(note.isEmpty ? "Catatan" : "Ubah catatan",
+                    style: TextStyle(color: theme.primaryColor, fontSize: 12)),
+              ),
+              IconButton(
+                tooltip: "Hapus",
+                onPressed: () => cart.removeFromCart(item.menu.id),
+                icon: const Icon(Icons.delete_outline,
+                    color: Colors.redAccent, size: 20),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildCartItem(CartItem item, CartProvider cart, ThemeProvider theme) {
     int currentPrice = cart.priceOf(item.menu);
+
+    if (isMobile(context)) return _buildMobileCartItem(item, cart, theme);
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -737,27 +1068,41 @@ class _HomePageState extends State<HomePage> {
         const SizedBox(width: 16), // Jarak antara judul dan search bar
 
         // 2. Ganti Container statis (300) menjadi Expanded agar fleksibel
-        Expanded(
-          flex: 2,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: theme.cardColor,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: theme.borderColor),
-            ),
-            child: TextField(
-              onChanged: (v) => setState(() => _searchQuery = v),
-              style: TextStyle(color: theme.textColor),
-              decoration: InputDecoration(
-                icon: Icon(Icons.search, color: theme.secondaryTextColor),
-                hintText: "Search dishes...",
-                border: InputBorder.none,
-              ),
-            ),
-          ),
-        ),
+        Expanded(flex: 2, child: _searchField(theme)),
       ],
+    );
+  }
+
+  Widget _searchField(ThemeProvider theme) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: theme.cardColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: theme.borderColor),
+      ),
+      child: TextField(
+        controller: _searchController,
+        onChanged: (v) => setState(() => _searchQuery = v),
+        textInputAction: TextInputAction.search,
+        style: TextStyle(color: theme.textColor),
+        decoration: InputDecoration(
+          icon: Icon(Icons.search, color: theme.secondaryTextColor),
+          hintText: "Search dishes...",
+          hintStyle: TextStyle(color: theme.secondaryTextColor),
+          border: InputBorder.none,
+          suffixIcon: _searchQuery.isEmpty
+              ? null
+              : IconButton(
+                  icon: Icon(Icons.close,
+                      size: 18, color: theme.secondaryTextColor),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() => _searchQuery = "");
+                  },
+                ),
+        ),
+      ),
     );
   }
 
@@ -805,12 +1150,33 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _buildMenuGrid(CartProvider cart, ThemeProvider theme) {
-    return GridView.builder(
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        childAspectRatio: 0.75,
-        crossAxisSpacing: 25,
-        mainAxisSpacing: 25,
+    final bool mobile = isMobile(context);
+    if (_filteredMenus.isEmpty) {
+      return ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        children: [
+          const SizedBox(height: 80),
+          Center(
+            child: Text(
+              _searchQuery.isEmpty ? "Belum ada menu" : "Menu tidak ditemukan",
+              style: TextStyle(color: theme.secondaryTextColor),
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Jumlah kolom menyesuaikan lebar layar: 2 di HP, 3+ di tablet
+    return LayoutBuilder(
+      builder: (context, constraints) => GridView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: EdgeInsets.only(bottom: mobile ? 16 : 0),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount:
+            (constraints.maxWidth / (mobile ? 170 : 220)).floor().clamp(2, 6),
+        childAspectRatio: mobile ? 0.72 : 0.75,
+        crossAxisSpacing: mobile ? 12 : 25,
+        mainAxisSpacing: mobile ? 12 : 25,
       ),
       itemCount: _filteredMenus.length,
       itemBuilder: (context, index) {
@@ -825,18 +1191,23 @@ class _HomePageState extends State<HomePage> {
           child: Opacity(
             opacity: isSoldOut ? 0.45 : 1,
             child: Container(
-            padding: const EdgeInsets.all(20),
+            padding: EdgeInsets.all(mobile ? 10 : 20),
             decoration: BoxDecoration(
               color: theme.cardColor,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: theme.borderColor),
+              borderRadius: BorderRadius.circular(mobile ? 16 : 20),
+              border: Border.all(
+                  color: inCart > 0 ? theme.primaryColor : theme.borderColor),
             ),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 // ... di dalam Column
                 Expanded(
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(15),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(mobile ? 12 : 15),
                     child: Builder(
                       builder: (context) {
                         // 1. Ambil nama file-nya saja secara otomatis (misal "menus/jus.jpg" jadi "jus.jpg")
@@ -863,27 +1234,54 @@ class _HomePageState extends State<HomePage> {
                       },
                     ),
                   ),
+                  // Jumlah di keranjang sebagai badge di pojok foto
+                  if (inCart > 0)
+                    Positioned(
+                      top: 6,
+                      right: 6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: theme.primaryColor,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          "x$inCart",
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 15),
+                SizedBox(height: mobile ? 8 : 15),
                 Text(
                   menu.name,
                   textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: theme.textColor,
                     fontWeight: FontWeight.bold,
+                    fontSize: mobile ? 13 : 14,
                   ),
                 ),
                 Text(
                   rupiah(displayPrice),
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: theme.primaryColor,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 Text(
-                  isSoldOut
-                      ? "HABIS"
-                      : "Stok ${menu.stock}${inCart > 0 ? '  |  di keranjang $inCart' : ''}",
+                  isSoldOut ? "HABIS" : "Stok ${menu.stock}",
+                  textAlign: TextAlign.center,
                   style: TextStyle(
                     color: isSoldOut
                         ? Colors.redAccent
@@ -899,6 +1297,7 @@ class _HomePageState extends State<HomePage> {
           ),
         );
       },
+      ),
     );
   }
 
@@ -963,6 +1362,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _handleSaveAsBill(CartProvider cart) async {
+    if (_isSavingBill) return; // cegah bill dobel karena tombol ditekan 2x
     if (_tableController.text.trim().isEmpty) {
       _showSnack("Isi nomor meja!");
       return;
@@ -996,6 +1396,7 @@ class _HomePageState extends State<HomePage> {
 
     cart.clearCart();
     if (!mounted) return;
+    _closeMobileCart();
     _syncInputsFromCart();
     _loadData();
     _showSnack(

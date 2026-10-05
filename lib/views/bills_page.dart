@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import '../services/api_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
+import '../utils/responsive.dart';
 import 'payment_page.dart';
 
 class BillsPage extends StatefulWidget {
@@ -58,6 +59,9 @@ class _BillsPageState extends State<BillsPage> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
+        insetPadding: isMobile(context)
+            ? const EdgeInsets.symmetric(horizontal: 16, vertical: 24)
+            : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
         scrollable: true,
         backgroundColor: theme.cardColor,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -87,33 +91,27 @@ class _BillsPageState extends State<BillsPage> {
                       fontWeight: FontWeight.bold,
                       fontSize: 14)),
               const SizedBox(height: 8),
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 200),
-                child: ListView.builder(
-                  shrinkWrap: true,
-                  itemCount: items.length,
-                  itemBuilder: (context, index) {
-                    final item = items[index];
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Expanded(
-                              child: Text(
-                                  "${item['qty']}x ${item['menu']?['name'] ?? 'Menu'}",
-                                  style: TextStyle(
-                                      color: theme.secondaryTextColor,
-                                      fontSize: 13))),
-                          Text(rupiah(item['subtotal']),
+              // Column biasa (bukan ListView): dialog ini sudah bisa di-scroll,
+              // dan ListView di dalam dialog membuat layout crash di layar HP.
+              ...items.map((item) {
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                          child: Text(
+                              "${item['qty']}x ${item['menu']?['name'] ?? 'Menu'}",
                               style: TextStyle(
-                                  color: theme.textColor, fontSize: 13)),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
+                                  color: theme.secondaryTextColor,
+                                  fontSize: 13))),
+                      Text(rupiah(item['subtotal']),
+                          style:
+                              TextStyle(color: theme.textColor, fontSize: 13)),
+                    ],
+                  ),
+                );
+              }),
               const Divider(height: 32),
               _totalRow("Subtotal", rupiah(bill['subtotal']), theme),
               _totalRow("Pajak (PB1)", rupiah(bill['tax_amount']), theme),
@@ -135,54 +133,62 @@ class _BillsPageState extends State<BillsPage> {
                 ],
               ),
               const SizedBox(height: 24),
-              Row(
-                children: [
-                  Expanded(
-                    flex: 2,
-                    child: SizedBox(
-                      height: 50,
-                      child: OutlinedButton.icon(
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: theme.primaryColor,
-                          side: BorderSide(color: theme.primaryColor),
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                        ),
-                        onPressed: () => _printBill(bill),
-                        icon: const Icon(Icons.print, size: 18),
-                        label: const Text("CETAK BILL",
-                            style: TextStyle(fontWeight: FontWeight.bold)),
-                      ),
+              _dialogActions(
+                printButton: SizedBox(
+                  height: 50,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: theme.primaryColor,
+                      side: BorderSide(color: theme.primaryColor),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
                     ),
+                    onPressed: () => _printBill(bill),
+                    icon: const Icon(Icons.print, size: 18),
+                    label: const Text("CETAK BILL",
+                        style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 3,
-                    child: SizedBox(
-                      height: 50,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green,
-                          shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12)),
-                        ),
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _navigateToPayment(bill);
-                        },
-                        child: const Text("PROSES PEMBAYARAN",
-                            style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold)),
-                      ),
+                ),
+                payButton: SizedBox(
+                  height: 50,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
                     ),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _navigateToPayment(bill);
+                    },
+                    child: const Text("PROSES PEMBAYARAN",
+                        style: TextStyle(
+                            color: Colors.white, fontWeight: FontWeight.bold)),
                   ),
-                ],
+                ),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+
+  // Di HP tombol ditumpuk (bayar di atas), di tablet berdampingan
+  Widget _dialogActions(
+      {required Widget printButton, required Widget payButton}) {
+    if (isMobile(context)) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [payButton, const SizedBox(height: 10), printButton],
+      );
+    }
+    return Row(
+      children: [
+        Expanded(flex: 2, child: printButton),
+        const SizedBox(width: 12),
+        Expanded(flex: 3, child: payButton),
+      ],
     );
   }
 
@@ -207,7 +213,9 @@ class _BillsPageState extends State<BillsPage> {
         .printCustomerCopy(Map<String, dynamic>.from(bill), isBill: true);
     if (!mounted) return;
     _showSnackBar(
-      printed ? "Tagihan dicetak" : "Printer tidak terhubung. Cek menu Printer.",
+      printed
+          ? "Tagihan dicetak"
+          : "Printer tidak terhubung. Cek menu Printer.",
       printed ? Colors.green : Colors.red,
     );
   }
@@ -221,43 +229,58 @@ class _BillsPageState extends State<BillsPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Provider.of<ThemeProvider>(context);
+    final bool mobile = isMobile(context);
     return Scaffold(
       backgroundColor: theme.backgroundColor,
       body: Padding(
-        padding: const EdgeInsets.all(32.0),
+        padding: EdgeInsets.all(pagePadding(context)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text("Active Bills",
-                        style: TextStyle(
-                            color: theme.textColor,
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold)),
-                    Text("Kelola pesanan gantung yang belum lunas",
-                        style: TextStyle(color: theme.secondaryTextColor)),
-                  ],
-                ),
-                ElevatedButton.icon(
-                  onPressed: _fetchBills,
-                  icon: const Icon(Icons.refresh, size: 20),
-                  label: const Text("Refresh Data"),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: theme.cardColor,
-                    foregroundColor: theme.primaryColor,
-                    side: BorderSide(color: theme.borderColor),
-                    shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text("Active Bills",
+                          style: TextStyle(
+                              color: theme.textColor,
+                              fontSize: mobile ? 22 : 28,
+                              fontWeight: FontWeight.bold)),
+                      Text(
+                          mobile
+                              ? "${_pendingBills.length} bill belum lunas"
+                              : "Kelola pesanan gantung yang belum lunas",
+                          style: TextStyle(
+                              color: theme.secondaryTextColor,
+                              fontSize: mobile ? 13 : 14)),
+                    ],
                   ),
                 ),
+                if (mobile)
+                  IconButton(
+                    tooltip: "Refresh",
+                    onPressed: _fetchBills,
+                    icon: Icon(Icons.refresh, color: theme.textColor),
+                  )
+                else
+                  ElevatedButton.icon(
+                    onPressed: _fetchBills,
+                    icon: const Icon(Icons.refresh, size: 20),
+                    label: const Text("Refresh Data"),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: theme.cardColor,
+                      foregroundColor: theme.primaryColor,
+                      side: BorderSide(color: theme.borderColor),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                  ),
               ],
             ),
-            const SizedBox(height: 32),
+            SizedBox(height: mobile ? 16 : 32),
             Expanded(
               child: _isLoading
                   ? Center(
@@ -265,18 +288,29 @@ class _BillsPageState extends State<BillsPage> {
                           CircularProgressIndicator(color: theme.primaryColor))
                   : _pendingBills.isEmpty
                       ? _buildEmptyState(theme)
-                      : GridView.builder(
-                          gridDelegate:
-                              const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: 4,
-                            crossAxisSpacing: 20,
-                            mainAxisSpacing: 20,
-                            childAspectRatio:
-                                1.3, // 🔥 Disesuaikan agar card lebih lebar (Fix Overflow)
+                      : RefreshIndicator(
+                          onRefresh: _fetchBills,
+                          color: theme.primaryColor,
+                          child: GridView.builder(
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            gridDelegate: mobile
+                                // HP: 1 kolom penuh supaya nama & total terbaca jelas
+                                ? const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 1,
+                                    mainAxisSpacing: 12,
+                                    mainAxisExtent: 112,
+                                  )
+                                : const SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: 4,
+                                    crossAxisSpacing: 20,
+                                    mainAxisSpacing: 20,
+                                    childAspectRatio:
+                                        1.3, // 🔥 Disesuaikan agar card lebih lebar (Fix Overflow)
+                                  ),
+                            itemCount: _pendingBills.length,
+                            itemBuilder: (context, index) =>
+                                _buildBillCard(_pendingBills[index], theme),
                           ),
-                          itemCount: _pendingBills.length,
-                          itemBuilder: (context, index) =>
-                              _buildBillCard(_pendingBills[index], theme),
                         ),
             ),
           ],
@@ -291,8 +325,12 @@ class _BillsPageState extends State<BillsPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label,
-              style: TextStyle(color: theme.secondaryTextColor, fontSize: 13)),
+          Flexible(
+            child: Text(label,
+                style:
+                    TextStyle(color: theme.secondaryTextColor, fontSize: 13)),
+          ),
+          const SizedBox(width: 8),
           Text(value, style: TextStyle(color: theme.textColor, fontSize: 13)),
         ],
       ),
@@ -330,15 +368,23 @@ class _BillsPageState extends State<BillsPage> {
                           fontWeight: FontWeight.bold,
                           fontSize: 11)),
                 ),
-                Row(
-                  children: [
-                    Icon(Icons.timer_outlined,
-                        size: 14, color: theme.secondaryTextColor),
-                    const SizedBox(width: 4),
-                    Text(_billTime(bill),
-                        style: TextStyle(
-                            color: theme.secondaryTextColor, fontSize: 11)),
-                  ],
+                const SizedBox(width: 8),
+                Flexible(
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.timer_outlined,
+                          size: 14, color: theme.secondaryTextColor),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(_billTime(bill),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                                color: theme.secondaryTextColor, fontSize: 11)),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),

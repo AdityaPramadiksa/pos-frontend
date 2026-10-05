@@ -72,6 +72,16 @@ class ApiService {
     };
   }
 
+  // Pesan yang bisa dipahami kasir, bukan teks exception mentah
+  String _connectionError(Object e) {
+    final String text = e.toString();
+    if (text.contains('Timeout') || text.contains('SocketException') ||
+        text.contains('ClientException') || text.contains('Connection')) {
+      return 'Server tidak terjangkau ($ipAddress). Cek WiFi & alamat server di ikon gear halaman login.';
+    }
+    return 'Koneksi gagal: $text';
+  }
+
   // --- HELPER PRIVATE UNTUK REQUEST GET ---
   Future<Map<String, dynamic>> _get(String endpoint) async {
     try {
@@ -80,7 +90,7 @@ class ApiService {
           .timeout(_timeout);
       return _decode(response);
     } catch (e) {
-      return {'status': 'error', 'message': 'Koneksi gagal: $e'};
+      return {'status': 'error', 'message': _connectionError(e)};
     }
   }
 
@@ -99,7 +109,7 @@ class ApiService {
           .timeout(_timeout);
       return _decode(response);
     } catch (e) {
-      return {'status': 'error', 'message': 'Koneksi gagal: $e'};
+      return {'status': 'error', 'message': _connectionError(e)};
     }
   }
 
@@ -136,7 +146,7 @@ class ApiService {
       }
       return data;
     } catch (e) {
-      return {'status': 'error', 'message': 'Gagal terhubung ke server: $e'};
+      return {'status': 'error', 'message': _connectionError(e)};
     }
   }
 

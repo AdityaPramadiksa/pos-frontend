@@ -5,6 +5,7 @@ import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
+import '../utils/responsive.dart';
 
 class PaymentPage extends StatefulWidget {
   final bool isFromBill; // Tambahkan baris ini
@@ -52,28 +53,75 @@ class _PaymentPageState extends State<PaymentPage> {
   Widget build(BuildContext context) {
     final cart = Provider.of<CartProvider>(context);
     final theme = Provider.of<ThemeProvider>(context);
-    final int total = cart.totalPrice;
-    final int change = _amountReceived > total ? _amountReceived - total : 0;
-    final bool isDelivery = cart.orderType == 'delivery';
+    final bool mobile = isMobile(context);
+
+    final appBar = AppBar(
+      leading: IconButton(
+        icon: Icon(
+          Icons.arrow_back_ios_new,
+          color: theme.textColor,
+          size: 20,
+        ),
+        onPressed: _isProcessing ? null : () => Navigator.pop(context),
+      ),
+      title: Text(
+        widget.isFromBill
+            ? "Pelunasan Bill"
+            : (mobile ? "Pembayaran" : "Confirmation & Payment"),
+        style: TextStyle(color: theme.textColor, fontWeight: FontWeight.bold),
+      ),
+      backgroundColor: theme.backgroundColor,
+      elevation: 0,
+    );
+
+    // --- VERSI HP: satu kolom, tombol konfirmasi menempel di bawah ---
+    if (mobile) {
+      return Scaffold(
+        backgroundColor: theme.backgroundColor,
+        appBar: appBar,
+        body: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: theme.cardColor,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: theme.borderColor),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _sectionTitle("Order Summary", theme, size: 18),
+                  const SizedBox(height: 12),
+                  ...cart.items
+                      .map((item) => _buildSummaryItem(item, cart, theme)),
+                  Divider(color: theme.borderColor, height: 24),
+                  ..._totalRows(cart, theme, compact: true),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            ..._paymentSection(cart, theme),
+          ],
+        ),
+        bottomNavigationBar: SafeArea(
+          top: false,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+            decoration: BoxDecoration(
+              color: theme.cardColor,
+              border: Border(top: BorderSide(color: theme.borderColor)),
+            ),
+            child: _confirmBtn(cart, theme),
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: theme.backgroundColor,
-      appBar: AppBar(
-        leading: IconButton(
-          icon: Icon(
-            Icons.arrow_back_ios_new,
-            color: theme.textColor,
-            size: 20,
-          ),
-          onPressed: _isProcessing ? null : () => Navigator.pop(context),
-        ),
-        title: Text(
-          widget.isFromBill ? "Pelunasan Bill" : "Confirmation & Payment",
-          style: TextStyle(color: theme.textColor, fontWeight: FontWeight.bold),
-        ),
-        backgroundColor: theme.backgroundColor,
-        elevation: 0,
-      ),
+      appBar: appBar,
       body: Row(
         children: [
           // SISI KIRI: RINGKASAN PESANAN
@@ -87,14 +135,7 @@ class _PaymentPageState extends State<PaymentPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    "Order Summary",
-                    style: TextStyle(
-                      color: theme.textColor,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                  _sectionTitle("Order Summary", theme, size: 22),
                   const SizedBox(height: 24),
                   Expanded(
                     child: ListView.builder(
@@ -104,28 +145,7 @@ class _PaymentPageState extends State<PaymentPage> {
                     ),
                   ),
                   Divider(color: theme.borderColor, height: 32),
-                  _priceRow("Subtotal", rupiah(cart.subtotalPrice), theme),
-                  _priceRow(
-                    cart.isBill ? "Tax" : "Tax (${cart.taxPercentLabel}%)",
-                    rupiah(cart.taxAmount),
-                    theme,
-                  ),
-                  if (cart.discountAmount > 0)
-                    _priceRow(
-                      cart.selectedDiscount != null
-                          ? "Discount (${cart.selectedDiscount!.name})"
-                          : "Discount",
-                      "- ${rupiah(cart.discountAmount)}",
-                      theme,
-                      color: Colors.redAccent,
-                    ),
-                  _priceRow(
-                    "Total",
-                    rupiah(total),
-                    theme,
-                    isBold: true,
-                    color: theme.primaryColor,
-                  ),
+                  ..._totalRows(cart, theme),
                 ],
               ),
             ),
@@ -144,126 +164,7 @@ class _PaymentPageState extends State<PaymentPage> {
                     child: SingleChildScrollView(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            "Customer Info",
-                            style: TextStyle(
-                              color: theme.textColor,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: theme.backgroundColor,
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: theme.borderColor),
-                            ),
-                            child: Wrap(
-                              spacing: 32,
-                              runSpacing: 12,
-                              children: [
-                                _infoTile("Customer", cart.customerName, theme),
-                                _infoTile(
-                                  "Table",
-                                  cart.tableNumber.isEmpty
-                                      ? "-"
-                                      : cart.tableNumber,
-                                  theme,
-                                ),
-                                _infoTile(
-                                  "Type",
-                                  cart.orderType
-                                      .replaceAll('_', ' ')
-                                      .toUpperCase(),
-                                  theme,
-                                ),
-                                if (isDelivery)
-                                  _infoTile(
-                                    "Platform",
-                                    platformLabel(cart.deliveryPlatform),
-                                    theme,
-                                  ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 32),
-                          Text(
-                            "Payment Method",
-                            style: TextStyle(
-                              color: theme.textColor,
-                              fontSize: 20,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Wrap(
-                            spacing: 12,
-                            runSpacing: 12,
-                            children: [
-                              // Dibayar oleh platform ojol (masuk rekap Gojek/Grab/ShopeeFood)
-                              if (isDelivery)
-                                _paymentOption(
-                                  cart,
-                                  "delivery",
-                                  Icons.motorcycle,
-                                  theme,
-                                  label: cart.deliveryPlatform.isEmpty
-                                      ? "Platform"
-                                      : cart.deliveryPlatform.toUpperCase(),
-                                ),
-                              _paymentOption(
-                                  cart, "Cash", Icons.payments_outlined, theme),
-                              _paymentOption(
-                                  cart, "QRIS", Icons.qr_code_scanner, theme),
-                              _paymentOption(
-                                  cart, "Debit", Icons.credit_card, theme),
-                              _paymentOption(
-                                  cart, "Credit", Icons.credit_score, theme),
-                            ],
-                          ),
-                          const SizedBox(height: 32),
-
-                          // TAMPILAN KHUSUS CASH
-                          if (cart.paymentMethod.toLowerCase() == "cash") ...[
-                            Text(
-                              "Amount Received",
-                              style: TextStyle(
-                                color: theme.secondaryTextColor,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            Text(
-                              rupiah(_amountReceived),
-                              style: TextStyle(
-                                color: theme.primaryColor,
-                                fontSize: 32,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Wrap(
-                              spacing: 10,
-                              runSpacing: 10,
-                              children: [
-                                _exactBtn(total, theme),
-                                ..._denominations
-                                    .map((val) => _denominationBtn(val, theme)),
-                                _clearBtn(theme),
-                              ],
-                            ),
-                            const SizedBox(height: 20),
-                            _priceRow(
-                              "Change",
-                              rupiah(change),
-                              theme,
-                              isBold: true,
-                              color: Colors.greenAccent,
-                            ),
-                          ],
-                        ],
+                        children: _paymentSection(cart, theme),
                       ),
                     ),
                   ),
@@ -278,6 +179,157 @@ class _PaymentPageState extends State<PaymentPage> {
         ],
       ),
     );
+  }
+
+  Widget _sectionTitle(String text, ThemeProvider theme, {double size = 20}) {
+    return Text(
+      text,
+      style: TextStyle(
+        color: theme.textColor,
+        fontSize: size,
+        fontWeight: FontWeight.bold,
+      ),
+    );
+  }
+
+  List<Widget> _totalRows(CartProvider cart, ThemeProvider theme,
+      {bool compact = false}) {
+    return [
+      _priceRow("Subtotal", rupiah(cart.subtotalPrice), theme,
+          compact: compact),
+      _priceRow(
+        cart.isBill ? "Tax" : "Tax (${cart.taxPercentLabel}%)",
+        rupiah(cart.taxAmount),
+        theme,
+        compact: compact,
+      ),
+      if (cart.discountAmount > 0)
+        _priceRow(
+          cart.selectedDiscount != null
+              ? "Discount (${cart.selectedDiscount!.name})"
+              : "Discount",
+          "- ${rupiah(cart.discountAmount)}",
+          theme,
+          color: Colors.redAccent,
+          compact: compact,
+        ),
+      _priceRow(
+        "Total",
+        rupiah(cart.totalPrice),
+        theme,
+        isBold: true,
+        color: theme.primaryColor,
+        compact: compact,
+      ),
+    ];
+  }
+
+  // Info pelanggan, pilihan metode bayar, dan input uang tunai
+  List<Widget> _paymentSection(CartProvider cart, ThemeProvider theme) {
+    final int total = cart.totalPrice;
+    final int change = _amountReceived > total ? _amountReceived - total : 0;
+    final bool isDelivery = cart.orderType == 'delivery';
+    final bool mobile = isMobile(context);
+
+    return [
+      _sectionTitle("Customer Info", theme, size: mobile ? 18 : 20),
+      const SizedBox(height: 12),
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: mobile ? theme.cardColor : theme.backgroundColor,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: theme.borderColor),
+        ),
+        child: Wrap(
+          spacing: 32,
+          runSpacing: 12,
+          children: [
+            _infoTile("Customer", cart.customerName, theme),
+            _infoTile(
+              "Table",
+              cart.tableNumber.isEmpty ? "-" : cart.tableNumber,
+              theme,
+            ),
+            _infoTile(
+              "Type",
+              cart.orderType.replaceAll('_', ' ').toUpperCase(),
+              theme,
+            ),
+            if (isDelivery)
+              _infoTile(
+                "Platform",
+                platformLabel(cart.deliveryPlatform),
+                theme,
+              ),
+          ],
+        ),
+      ),
+      SizedBox(height: mobile ? 24 : 32),
+      _sectionTitle("Payment Method", theme, size: mobile ? 18 : 20),
+      const SizedBox(height: 12),
+      Wrap(
+        spacing: mobile ? 8 : 12,
+        runSpacing: mobile ? 8 : 12,
+        children: [
+          // Dibayar oleh platform ojol (masuk rekap Gojek/Grab/ShopeeFood)
+          if (isDelivery)
+            _paymentOption(
+              cart,
+              "delivery",
+              Icons.motorcycle,
+              theme,
+              label: cart.deliveryPlatform.isEmpty
+                  ? "Platform"
+                  : cart.deliveryPlatform.toUpperCase(),
+            ),
+          _paymentOption(cart, "Cash", Icons.payments_outlined, theme),
+          _paymentOption(cart, "QRIS", Icons.qr_code_scanner, theme),
+          _paymentOption(cart, "Debit", Icons.credit_card, theme),
+          _paymentOption(cart, "Credit", Icons.credit_score, theme),
+        ],
+      ),
+      SizedBox(height: mobile ? 24 : 32),
+
+      // TAMPILAN KHUSUS CASH
+      if (cart.paymentMethod.toLowerCase() == "cash") ...[
+        Text(
+          "Amount Received",
+          style: TextStyle(
+            color: theme.secondaryTextColor,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        Text(
+          rupiah(_amountReceived),
+          style: TextStyle(
+            color: theme.primaryColor,
+            fontSize: mobile ? 28 : 32,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            _exactBtn(total, theme),
+            ..._denominations.map((val) => _denominationBtn(val, theme)),
+            _clearBtn(theme),
+          ],
+        ),
+        const SizedBox(height: 20),
+        _priceRow(
+          "Change",
+          rupiah(change),
+          theme,
+          isBold: true,
+          color: Colors.greenAccent,
+          compact: mobile,
+        ),
+      ],
+    ];
   }
 
   Widget _buildSummaryItem(
@@ -374,8 +426,9 @@ class _PaymentPageState extends State<PaymentPage> {
               }
             },
       child: Container(
-        width: 100,
-        height: 80,
+        // HP: 4 metode muat dalam satu baris
+        width: isMobile(context) ? 74 : 100,
+        height: isMobile(context) ? 72 : 80,
         decoration: BoxDecoration(
           color: isSelected
               ? theme.primaryColor.withAlpha(40)
@@ -546,22 +599,26 @@ class _PaymentPageState extends State<PaymentPage> {
     ThemeProvider theme, {
     bool isBold = false,
     Color? color,
+    bool compact = false,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
+      padding: EdgeInsets.symmetric(vertical: compact ? 4 : 6),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: TextStyle(color: theme.secondaryTextColor, fontSize: 16),
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(
+                  color: theme.secondaryTextColor, fontSize: compact ? 14 : 16),
+            ),
           ),
           Text(
             value,
             style: TextStyle(
               color: color ?? theme.textColor,
               fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-              fontSize: isBold ? 22 : 18,
+              fontSize: isBold ? (compact ? 20 : 22) : (compact ? 15 : 18),
             ),
           ),
         ],

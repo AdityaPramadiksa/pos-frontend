@@ -8,6 +8,7 @@ import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
+import '../utils/responsive.dart';
 import 'login_page.dart';
 
 class SalesRecapPage extends StatefulWidget {
@@ -75,7 +76,8 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
   Future<void> _reprintLastSettlement() async {
     final res = await _apiService.getLastSettlement();
     if (res['status'] != 'success') {
-      _showSnackBar(res['message'] ?? "Belum ada shift yang ditutup", Colors.red);
+      _showSnackBar(
+          res['message'] ?? "Belum ada shift yang ditutup", Colors.red);
       return;
     }
     final bool printed = await _printReport(res['data']);
@@ -118,7 +120,8 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
     if (!mounted) return;
     setState(() => _isLoading = true);
 
-    final res = await _apiService.closeSettlement(notes, actualCash: actualCash);
+    final res =
+        await _apiService.closeSettlement(notes, actualCash: actualCash);
 
     if (res['status'] != 'success') {
       if (mounted) setState(() => _isLoading = false);
@@ -172,6 +175,9 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
+        insetPadding: isMobile(context)
+            ? const EdgeInsets.symmetric(horizontal: 16, vertical: 24)
+            : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
         backgroundColor: theme.cardColor,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         title: Text(
@@ -237,7 +243,8 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
                     child: Text(
                       "Masih ada $pendingCount bill belum lunas (${rupiah(summary['pending_total'])}). "
                       "Bill ini tidak masuk settlement dan akan terhitung di shift yang melunasinya.",
-                      style: const TextStyle(color: Colors.orange, fontSize: 12),
+                      style:
+                          const TextStyle(color: Colors.orange, fontSize: 12),
                     ),
                   ),
                 ],
@@ -299,7 +306,8 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
             },
             child: const Text(
               "YA, TUTUP SHIFT",
-              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+              style:
+                  TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
             ),
           ),
         ],
@@ -328,6 +336,40 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
   @override
   Widget build(BuildContext context) {
     final theme = Provider.of<ThemeProvider>(context);
+
+    // --- VERSI HP: kartu bertumpuk, tombol aksi menempel di bawah ---
+    if (isMobile(context)) {
+      return Scaffold(
+        backgroundColor: theme.backgroundColor,
+        body: _isLoading
+            ? Center(
+                child: CircularProgressIndicator(color: theme.primaryColor))
+            : RefreshIndicator(
+                onRefresh: _fetchRecap,
+                color: theme.primaryColor,
+                child: ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    _buildMobileHeader(theme),
+                    const SizedBox(height: 16),
+                    _buildFinancialSummary(theme),
+                    const SizedBox(height: 16),
+                    _buildMenuRecap(theme),
+                  ],
+                ),
+              ),
+        bottomNavigationBar: _isLoading
+            ? null
+            : Container(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                decoration: BoxDecoration(
+                  color: theme.cardColor,
+                  border: Border(top: BorderSide(color: theme.borderColor)),
+                ),
+                child: _actionButtons(theme),
+              ),
+      );
+    }
 
     return Scaffold(
       backgroundColor: theme.backgroundColor,
@@ -360,6 +402,49 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildMobileHeader(ThemeProvider theme) {
+    final settlement = _recapData?['settlement'] ?? {};
+    final DateTime? openedAt =
+        DateTime.tryParse(settlement['opened_at']?.toString() ?? '');
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Rekap Penjualan",
+                style: TextStyle(
+                  color: theme.textColor,
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                openedAt == null
+                    ? "Rekap shift berjalan"
+                    : "${settlement['cashier'] ?? ''} - buka ${DateFormat('dd MMM HH:mm').format(openedAt)}",
+                style: TextStyle(color: theme.secondaryTextColor, fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+        IconButton(
+          tooltip: "Cetak ulang settlement terakhir",
+          onPressed: _isPrinting ? null : _reprintLastSettlement,
+          icon: Icon(Icons.receipt_long, color: theme.primaryColor),
+        ),
+        IconButton(
+          tooltip: "Refresh",
+          onPressed: _fetchRecap,
+          icon: Icon(Icons.refresh, color: theme.textColor),
+        ),
+      ],
     );
   }
 
@@ -423,7 +508,7 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
     final orderTypes = _recapData?['order_types'] as List? ?? [];
 
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(isMobile(context) ? 16 : 24),
       decoration: BoxDecoration(
         color: theme.cardColor,
         borderRadius: BorderRadius.circular(16),
@@ -443,71 +528,68 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
           Divider(height: 32, color: theme.borderColor),
 
           // 🔥 BAGIAN INI DIBUAT BISA DI-SCROLL 🔥
-          Expanded(
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildRow(
-                      "Gross Sales", rupiah(summary['gross_sales']), theme),
-                  _buildRow(
-                    "Total Discount",
-                    "- ${rupiah(summary['total_discount'])}",
+          _scrollArea(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildRow("Gross Sales", rupiah(summary['gross_sales']), theme),
+                _buildRow(
+                  "Total Discount",
+                  "- ${rupiah(summary['total_discount'])}",
+                  theme,
+                  color: Colors.redAccent,
+                ),
+                _buildRow("Tax (PB1)", rupiah(summary['total_tax']), theme),
+                const SizedBox(height: 8),
+                _buildRow(
+                  "Petty Cash (Pengeluaran)",
+                  "- ${rupiah(summary['total_expenses'])}",
+                  theme,
+                  color: Colors.orangeAccent,
+                ),
+                _buildRow(
+                  "Uang Fisik di Laci",
+                  rupiah(summary['expected_ending_cash']),
+                  theme,
+                  color: Colors.greenAccent,
+                ),
+                Divider(height: 32, color: theme.borderColor),
+                _sectionTitle("PAYMENT METHODS", theme),
+                ...payments.map(
+                  (p) => _buildRow(
+                    "${p['label']} (${p['qty']})",
+                    rupiah(p['total']),
                     theme,
+                    isSecondary: true,
+                  ),
+                ),
+                Divider(height: 32, color: theme.borderColor),
+                _sectionTitle("TIPE ORDER", theme),
+                ...orderTypes.map(
+                  (t) => _buildRow(
+                    "${t['label']} (${t['qty']})",
+                    rupiah(t['total']),
+                    theme,
+                    isSecondary: true,
+                  ),
+                ),
+                if (toInt(summary['void_count']) > 0)
+                  _buildRow(
+                    "VOID (${summary['void_count']})",
+                    rupiah(summary['void_total']),
+                    theme,
+                    isSecondary: true,
                     color: Colors.redAccent,
                   ),
-                  _buildRow("Tax (PB1)", rupiah(summary['total_tax']), theme),
-                  const SizedBox(height: 8),
+                if (toInt(summary['pending_count']) > 0)
                   _buildRow(
-                    "Petty Cash (Pengeluaran)",
-                    "- ${rupiah(summary['total_expenses'])}",
+                    "BILL GANTUNG (${summary['pending_count']})",
+                    rupiah(summary['pending_total']),
                     theme,
+                    isSecondary: true,
                     color: Colors.orangeAccent,
                   ),
-                  _buildRow(
-                    "Uang Fisik di Laci",
-                    rupiah(summary['expected_ending_cash']),
-                    theme,
-                    color: Colors.greenAccent,
-                  ),
-                  Divider(height: 32, color: theme.borderColor),
-                  _sectionTitle("PAYMENT METHODS", theme),
-                  ...payments.map(
-                    (p) => _buildRow(
-                      "${p['label']} (${p['qty']})",
-                      rupiah(p['total']),
-                      theme,
-                      isSecondary: true,
-                    ),
-                  ),
-                  Divider(height: 32, color: theme.borderColor),
-                  _sectionTitle("TIPE ORDER", theme),
-                  ...orderTypes.map(
-                    (t) => _buildRow(
-                      "${t['label']} (${t['qty']})",
-                      rupiah(t['total']),
-                      theme,
-                      isSecondary: true,
-                    ),
-                  ),
-                  if (toInt(summary['void_count']) > 0)
-                    _buildRow(
-                      "VOID (${summary['void_count']})",
-                      rupiah(summary['void_total']),
-                      theme,
-                      isSecondary: true,
-                      color: Colors.redAccent,
-                    ),
-                  if (toInt(summary['pending_count']) > 0)
-                    _buildRow(
-                      "BILL GANTUNG (${summary['pending_count']})",
-                      rupiah(summary['pending_total']),
-                      theme,
-                      isSecondary: true,
-                      color: Colors.orangeAccent,
-                    ),
-                ],
-              ),
+              ],
             ),
           ),
 
@@ -516,87 +598,102 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                "Total Net Sales (${summary['total_bills'] ?? 0} bill)",
-                style: TextStyle(
-                  color: theme.primaryColor,
-                  fontWeight: FontWeight.bold,
+              Flexible(
+                child: Text(
+                  "Total Net Sales (${summary['total_bills'] ?? 0} bill)",
+                  style: TextStyle(
+                    color: theme.primaryColor,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
               Text(
                 rupiah(summary['net_sales']),
                 style: TextStyle(
                   color: theme.primaryColor,
-                  fontSize: 28,
+                  fontSize: isMobile(context) ? 22 : 28,
                   fontWeight: FontWeight.bold,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: _isPrinting ? null : _printCurrentRecap,
-                  icon: _isPrinting
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.print),
-                  label: const Text(
-                    "CETAK REKAP",
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: theme.primaryColor,
-                    side: BorderSide(color: theme.primaryColor),
-                    padding: const EdgeInsets.all(20),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: ElevatedButton.icon(
-                  onPressed: _recapData == null || _isPrinting
-                      ? null
-                      : () => _showSettlementDialog(theme),
-                  icon: const Icon(Icons.lock_clock),
-                  label: const Text(
-                    "END SHIFT / SETTLEMENT",
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.redAccent,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.all(20),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
+          // Di HP tombol aksi ada di bar bawah layar
+          if (!isMobile(context)) ...[
+            const SizedBox(height: 20),
+            _actionButtons(theme),
+          ],
         ],
       ),
+    );
+  }
+
+  Widget _scrollArea(Widget child) => isMobile(context)
+      ? child
+      : Expanded(child: SingleChildScrollView(child: child));
+
+  Widget _actionButtons(ThemeProvider theme) {
+    final bool mobile = isMobile(context);
+    final EdgeInsets buttonPadding = EdgeInsets.all(mobile ? 14 : 20);
+
+    return Row(
+      children: [
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _isPrinting ? null : _printCurrentRecap,
+            icon: _isPrinting
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.print),
+            label: Text(
+              mobile ? "CETAK" : "CETAK REKAP",
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: theme.primaryColor,
+              side: BorderSide(color: theme.primaryColor),
+              padding: buttonPadding,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          flex: 2,
+          child: ElevatedButton.icon(
+            onPressed: _recapData == null || _isPrinting
+                ? null
+                : () => _showSettlementDialog(theme),
+            icon: const Icon(Icons.lock_clock),
+            label: Text(
+              mobile ? "END SHIFT" : "END SHIFT / SETTLEMENT",
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+              padding: buttonPadding,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
   // Penjualan per menu: qty x harga = total, dikelompokkan per kategori
   Widget _buildMenuRecap(ThemeProvider theme) {
     final categories = _recapData?['menus_by_category'] as List? ?? [];
-    final int totalQty =
-        categories.fold(0, (sum, c) => sum + toInt(c['qty']));
+    final int totalQty = categories.fold(0, (sum, c) => sum + toInt(c['qty']));
 
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: EdgeInsets.all(isMobile(context) ? 16 : 24),
       decoration: BoxDecoration(
         color: theme.cardColor,
         borderRadius: BorderRadius.circular(16),
@@ -623,15 +720,19 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
             ],
           ),
           Divider(height: 32, color: theme.borderColor),
-          Expanded(
-            child: categories.isEmpty
-                ? Center(
-                    child: Text(
-                      "Belum ada data penjualan",
-                      style: TextStyle(color: theme.secondaryTextColor),
+          _scrollArea(
+            categories.isEmpty
+                ? Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 24),
+                    child: Center(
+                      child: Text(
+                        "Belum ada data penjualan",
+                        style: TextStyle(color: theme.secondaryTextColor),
+                      ),
                     ),
                   )
-                : ListView(
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       for (var category in categories) ...[
                         Padding(
@@ -716,13 +817,16 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: TextStyle(
-              color: isSecondary ? theme.secondaryTextColor : theme.textColor,
-              fontSize: isSecondary ? 13 : 15,
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(
+                color: isSecondary ? theme.secondaryTextColor : theme.textColor,
+                fontSize: isSecondary ? 13 : 15,
+              ),
             ),
           ),
+          const SizedBox(width: 8),
           Text(
             value,
             style: TextStyle(
@@ -748,10 +852,13 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: TextStyle(color: theme.secondaryTextColor, fontSize: 13),
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(color: theme.secondaryTextColor, fontSize: 13),
+            ),
           ),
+          const SizedBox(width: 8),
           Text(
             value,
             style: TextStyle(
