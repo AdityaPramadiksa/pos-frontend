@@ -2,7 +2,7 @@ name: pos_babi_guling
 description: "A new Flutter project for Babi Guling POS System."
 publish_to: "none"
 
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
   sdk: ">=3.0.0 <4.0.0"
@@ -34,6 +34,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/mengede.png
+    - assets/app_icon.png
   fonts:
     # Plus Jakarta Sans (SIL Open Font License, lihat assets/fonts/OFL.txt)
     - family: PlusJakartaSans

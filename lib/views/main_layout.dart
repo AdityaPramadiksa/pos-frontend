@@ -314,20 +314,12 @@ class _MainLayoutState extends State<MainLayout> {
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
       child: Column(
         children: [
-          Container(
-            width: 40,
-            height: 40,
-            margin: const EdgeInsets.only(bottom: 16),
-            decoration: BoxDecoration(
-              color: theme.primaryColor,
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: ClipRRect(
               borderRadius: BorderRadius.circular(10),
+              child: Image.asset('assets/app_icon.png', width: 40, height: 40),
             ),
-            alignment: Alignment.center,
-            child: const Text("MG",
-                style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 14)),
           ),
           Expanded(
             child: SingleChildScrollView(

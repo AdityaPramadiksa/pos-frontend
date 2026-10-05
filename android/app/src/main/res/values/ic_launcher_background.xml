@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Warna kertas tua dari logo Men Gede -->
-    <color name="ic_launcher_background">#F1DCAF</color>
+    <!-- Cokelat logo Kasir Men Gede (sama dengan warna utama aplikasi) -->
+    <color name="ic_launcher_background">#9A5216</color>
 </resources>

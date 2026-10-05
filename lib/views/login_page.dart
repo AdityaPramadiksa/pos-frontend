@@ -164,19 +164,10 @@ class _LoginPageState extends State<LoginPage> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Container(
-                          width: 48,
-                          height: 48,
-                          alignment: Alignment.center,
-                          decoration: BoxDecoration(
-                            color: theme.primaryColor,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Text("MG",
-                              style: TextStyle(
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 16)),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: Image.asset('assets/app_icon.png',
+                              width: 56, height: 56),
                         ),
                         const SizedBox(height: 14),
                         Text("Kasir Men Gede",
