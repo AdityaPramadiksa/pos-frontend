@@ -7,7 +7,9 @@ import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
 import '../services/app_settings.dart';
 import '../services/printer_service.dart';
+import '../services/sync_service.dart';
 import '../utils/responsive.dart';
+import '../widgets/sync_status.dart';
 import 'home_page.dart';
 import 'login_page.dart';
 import 'order_history_page.dart';
@@ -72,7 +74,13 @@ class _MainLayoutState extends State<MainLayout> {
       setState(() => _cashierName = prefs.getString('user_name') ?? "");
     }
 
-    // Buka shift (otomatis di server), lalu ambil pengaturan toko terbaru
+    // Antrean transaksi offline: muat & kirim berkala selama aplikasi dibuka
+    await SyncService().load();
+    SyncService().start();
+
+    // Buka shift (otomatis di server), lalu ambil pengaturan toko terbaru.
+    // Saat offline keduanya gagal tanpa masalah: shift dibuka server ketika
+    // transaksi pertama terkirim, pengaturan memakai salinan terakhir.
     await _apiService.checkSettlementStatus();
     await AppSettings().refresh();
     if (mounted) {
@@ -89,9 +97,10 @@ class _MainLayoutState extends State<MainLayout> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text("Keluar dari aplikasi?"),
-        content: const Text(
+        content: Text(
           "Shift Anda tetap berjalan dan bisa dilanjutkan saat masuk lagi. "
-          "Untuk menutup shift dan mencetak settlement, buka menu Rekap.",
+          "Untuk menutup shift dan mencetak settlement, buka menu Rekap."
+          "${SyncService().pendingCount > 0 ? '\n\nTransaksi yang belum terkirim tetap dikirim otomatis selama aplikasi terbuka.' : ''}",
         ),
         actions: [
           TextButton(
@@ -268,7 +277,15 @@ class _MainLayoutState extends State<MainLayout> {
     if (isMobile(context)) {
       return Scaffold(
         backgroundColor: theme.backgroundColor,
-        body: SafeArea(bottom: false, child: _page(nav.index)),
+        body: SafeArea(
+          bottom: false,
+          child: Column(
+            children: [
+              const SyncStatusBar(),
+              Expanded(child: _page(nav.index)),
+            ],
+          ),
+        ),
         bottomNavigationBar: _buildBottomNav(theme, nav),
       );
     }
@@ -321,6 +338,7 @@ class _MainLayoutState extends State<MainLayout> {
               ),
             ),
           ),
+          const SyncStatusBar(compact: true),
           if (_cashierName.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),

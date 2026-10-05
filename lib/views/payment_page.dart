@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/cart_provider.dart';
 import '../providers/theme_provider.dart';
-import '../services/api_service.dart';
+import '../services/pos_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
 import '../utils/responsive.dart';
@@ -19,7 +19,7 @@ class PaymentPage extends StatefulWidget {
 }
 
 class _PaymentPageState extends State<PaymentPage> {
-  final ApiService _apiService = ApiService();
+  final PosService _pos = PosService();
   int _amountReceived = 0;
   bool _isProcessing = false;
 
@@ -532,21 +532,16 @@ class _PaymentPageState extends State<PaymentPage> {
     try {
       Map<String, dynamic> response;
 
-      if (widget.isFromBill && cart.currentOrderId != null) {
-        response = await _apiService.payPendingBill(
-          cart.currentOrderId!,
-          cart.paymentMethod,
-          isCash ? _amountReceived : null,
+      if (widget.isFromBill && cart.currentBill != null) {
+        response = await _pos.payBill(
+          cart.currentBill!,
+          method: cart.paymentMethod,
+          amountPaid: isCash ? _amountReceived : null,
         );
       } else {
-        response = await _apiService.saveTransaction(
-          items: cart.items,
-          paymentMethod: cart.paymentMethod,
-          orderType: cart.orderType,
-          deliveryPlatform: cart.deliveryPlatform,
-          customerName: cart.customerName,
-          tableNumber: cart.tableNumber,
-          discountId: cart.selectedDiscount?.id,
+        response = await _pos.createOrder(
+          cart,
+          pending: false,
           amountPaid: isCash ? _amountReceived : null,
         );
       }
@@ -555,8 +550,10 @@ class _PaymentPageState extends State<PaymentPage> {
         throw Exception(response['message'] ?? "Pembayaran gagal diproses");
       }
 
-      // Pembayaran sudah tercatat di server. Mulai dari sini kegagalan cetak
-      // tidak boleh membuat transaksi terlihat gagal (bisa dobel input).
+      // Pembayaran sudah tercatat (di server, atau di perangkat bila offline).
+      // Mulai dari sini kegagalan cetak tidak boleh membuat transaksi
+      // terlihat gagal (bisa dobel input).
+      final bool queued = response['queued'] == true;
       bool printed = true;
       int changeAmount = 0;
       final order = response['data'];
@@ -579,6 +576,7 @@ class _PaymentPageState extends State<PaymentPage> {
         Provider.of<ThemeProvider>(context, listen: false),
         isCash ? changeAmount : null,
         printed,
+        queued,
       );
     } catch (e) {
       if (!mounted) return;
@@ -622,7 +620,8 @@ class _PaymentPageState extends State<PaymentPage> {
     );
   }
 
-  void _showSuccessDialog(ThemeProvider theme, int? change, bool printed) {
+  void _showSuccessDialog(
+      ThemeProvider theme, int? change, bool printed, bool queued) {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -655,6 +654,14 @@ class _PaymentPageState extends State<PaymentPage> {
                   fontSize: 24,
                   fontWeight: FontWeight.w700,
                 ),
+              ),
+            ],
+            if (queued) ...[
+              const SizedBox(height: 12),
+              Text(
+                "Sedang offline. Transaksi tersimpan di perangkat dan dikirim otomatis ke server saat sinyal kembali.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: theme.secondaryTextColor, fontSize: 12),
               ),
             ],
             if (!printed) ...[

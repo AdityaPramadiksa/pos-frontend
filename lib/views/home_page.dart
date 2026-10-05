@@ -8,7 +8,8 @@ import '../providers/theme_provider.dart';
 import '../models/menu_model.dart';
 import '../models/category_model.dart';
 import '../models/discount_model.dart';
-import '../services/api_service.dart';
+import '../services/pos_service.dart';
+import '../services/sync_service.dart';
 import '../services/app_settings.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
@@ -24,7 +25,7 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  final ApiService _apiService = ApiService();
+  final PosService _pos = PosService();
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _tableController = TextEditingController();
   final TextEditingController _searchController = TextEditingController();
@@ -42,6 +43,8 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    _syncedTick = SyncService().syncedTick;
+    SyncService().addListener(_onSync);
     _loadData();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -54,15 +57,24 @@ class _HomePageState extends State<HomePage> {
 
   @override
   void dispose() {
+    SyncService().removeListener(_onSync);
     _nameController.dispose();
     _tableController.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
+  // Setelah transaksi offline terkirim, stok di server sudah terbaru
+  int _syncedTick = 0;
+  void _onSync() {
+    if (SyncService().syncedTick == _syncedTick) return;
+    _syncedTick = SyncService().syncedTick;
+    if (mounted) _loadData();
+  }
+
   Future<void> _loadData() async {
-    final cats = await _apiService.getCategories();
-    final items = await _apiService.getMenus();
+    final cats = await _pos.categories();
+    final items = await _pos.menus();
     if (!mounted) return;
     setState(() {
       _categories = cats;
@@ -135,7 +147,7 @@ class _HomePageState extends State<HomePage> {
         builder: (sheetContext, setSheet) {
           Future<void> save(int stock) async {
             setSheet(() => saving = true);
-            final res = await _apiService.updateStock(menu.id, stock);
+            final res = await _pos.updateStock(menu, stock);
             if (!sheetContext.mounted) return;
             setSheet(() => saving = false);
             if (res['status'] == 'success') {
@@ -231,7 +243,7 @@ class _HomePageState extends State<HomePage> {
 
   void _showDiscountPicker(CartProvider cart) async {
     final theme = Provider.of<ThemeProvider>(context, listen: false);
-    final List<DiscountModel> discounts = await _apiService.getDiscounts();
+    final List<DiscountModel> discounts = await _pos.discounts();
     if (!mounted) return;
 
     showModalBottomSheet(
@@ -426,14 +438,7 @@ class _HomePageState extends State<HomePage> {
     _applyInputs(cart);
     setState(() => _isSubmitting = true);
 
-    final res = await _apiService.saveTransaction(
-      items: cart.items,
-      orderType: cart.orderType,
-      customerName: cart.customerName,
-      tableNumber: cart.tableNumber,
-      discountId: cart.selectedDiscount?.id,
-      isPending: true,
-    );
+    final res = await _pos.createOrder(cart, pending: true);
 
     if (!mounted) return;
     setState(() => _isSubmitting = false);
@@ -450,6 +455,8 @@ class _HomePageState extends State<HomePage> {
     }
 
     final String table = cart.tableNumber;
+    final String offline =
+        res['queued'] == true ? " (offline, dikirim saat online)" : "";
     cart.clearCart();
     if (!mounted) return;
     _closeMobileCart();
@@ -457,8 +464,8 @@ class _HomePageState extends State<HomePage> {
     _loadData();
     _showSnack(
       printed
-          ? "Bill meja $table disimpan, ceker dapur dicetak."
-          : "Bill meja $table disimpan, tapi ceker dapur tidak tercetak. Periksa printer.",
+          ? "Bill meja $table disimpan$offline, ceker dapur dicetak."
+          : "Bill meja $table disimpan$offline, tapi ceker dapur tidak tercetak. Periksa printer.",
       success: printed,
       error: !printed,
     );
@@ -466,11 +473,10 @@ class _HomePageState extends State<HomePage> {
 
   /// Tambah item di keranjang ke bill yang belum dibayar
   Future<void> _handleAppendToBill(CartProvider cart) async {
-    if (_isSubmitting || cart.appendOrderId == null) return;
+    if (_isSubmitting || cart.appendBill == null) return;
     setState(() => _isSubmitting = true);
 
-    final res =
-        await _apiService.addItemsToBill(cart.appendOrderId!, cart.items);
+    final res = await _pos.addItemsToBill(cart.appendBill!, cart);
 
     if (!mounted) return;
     setState(() => _isSubmitting = false);

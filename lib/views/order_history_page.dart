@@ -3,6 +3,8 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
+import '../services/pos_service.dart';
+import '../services/sync_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
 import '../utils/responsive.dart';
@@ -17,8 +19,11 @@ class OrderHistoryPage extends StatefulWidget {
 
 class _OrderHistoryPageState extends State<OrderHistoryPage> {
   final ApiService _apiService = ApiService();
-  List<dynamic> _orders = [];
+  final PosService _pos = PosService();
+  List<Map<String, dynamic>> _orders = [];
   bool _isLoading = true;
+  bool _fresh = true;
+  int _syncedTick = 0;
 
   static const Map<String, String> _typeLabels = {
     'dine_in': 'Makan di sini',
@@ -29,16 +34,31 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
   @override
   void initState() {
     super.initState();
+    _syncedTick = SyncService().syncedTick;
+    SyncService().addListener(_onSync);
+    _fetchHistory();
+  }
+
+  @override
+  void dispose() {
+    SyncService().removeListener(_onSync);
+    super.dispose();
+  }
+
+  void _onSync() {
+    if (SyncService().syncedTick == _syncedTick) return;
+    _syncedTick = SyncService().syncedTick;
     _fetchHistory();
   }
 
   Future<void> _fetchHistory() async {
     if (!mounted) return;
     setState(() => _isLoading = _orders.isEmpty);
-    final data = await _apiService.getOrderHistory();
+    final res = await _pos.history();
     if (!mounted) return;
     setState(() {
-      _orders = data;
+      _orders = res.items;
+      _fresh = res.fresh;
       _isLoading = false;
     });
   }
@@ -70,6 +90,14 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
   }
 
   Widget _statusChip(dynamic order) {
+    if (order['_failed'] == true) {
+      return const StatusChip("Gagal terkirim", tone: ChipTone.danger);
+    }
+    if (PosService.isUnsynced(order)) {
+      return StatusChip(
+          order['status'] == 'paid' ? "Lunas · offline" : "Bill · offline",
+          tone: ChipTone.neutral);
+    }
     switch (order['status'].toString().toLowerCase()) {
       case 'paid':
         return const StatusChip("Lunas", tone: ChipTone.success);
@@ -98,7 +126,8 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
             PageHeader(
               title: "Riwayat pesanan",
               subtitle:
-                  "Hari ini, ${DateFormat('d MMMM yyyy', 'id').format(DateTime.now())} · $paidCount lunas dari ${_orders.length} pesanan",
+                  "Hari ini, ${DateFormat('d MMMM yyyy', 'id').format(DateTime.now())} · $paidCount lunas dari ${_orders.length} pesanan"
+                  "${_fresh ? '' : ' · offline'}",
               compact: mobile,
               actions: [
                 IconButton(
@@ -438,7 +467,8 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
           ),
         ),
         actions: [
-          if (!isVoid)
+          // Void dicek PIN admin di server, jadi hanya untuk pesanan yang sudah terkirim
+          if (!isVoid && !PosService.isUnsynced(order) && order['id'] != null)
             TextButton(
               style: TextButton.styleFrom(foregroundColor: theme.dangerColor),
               onPressed: () {

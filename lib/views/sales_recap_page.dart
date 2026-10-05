@@ -7,6 +7,8 @@ import '../providers/cart_provider.dart';
 import '../providers/nav_provider.dart';
 import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
+import '../services/pos_service.dart';
+import '../services/sync_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
 import '../utils/responsive.dart';
@@ -27,9 +29,28 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
   bool _isLoading = true;
   bool _isPrinting = false;
 
+  /// Rekap dari salinan terakhir di perangkat (server tidak terjangkau)
+  DateTime? _cachedAt;
+  int _syncedTick = 0;
+
   @override
   void initState() {
     super.initState();
+    _syncedTick = SyncService().syncedTick;
+    SyncService().addListener(_onSync);
+    _fetchRecap();
+  }
+
+  @override
+  void dispose() {
+    SyncService().removeListener(_onSync);
+    super.dispose();
+  }
+
+  void _onSync() {
+    if (mounted) setState(() {}); // jumlah transaksi belum terkirim berubah
+    if (SyncService().syncedTick == _syncedTick) return;
+    _syncedTick = SyncService().syncedTick;
     _fetchRecap();
   }
 
@@ -39,12 +60,51 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
     final res = await _apiService.getSalesRecapitulation();
     if (!mounted) return;
     setState(() {
-      if (res['status'] == 'success') _recapData = res['data'];
+      if (res['status'] == 'success') {
+        _recapData = res['data'];
+        _cachedAt = res['cached'] == true
+            ? DateTime.tryParse(res['saved_at']?.toString() ?? '')
+            : null;
+      }
       _isLoading = false;
     });
     if (res['status'] != 'success') {
       _showSnackBar(res['message'] ?? "Rekap gagal dimuat.", error: true);
     }
+  }
+
+  /// Keterangan bila rekap belum mencakup semua transaksi
+  String? _staleNote() {
+    final int unsent = SyncService().pendingCount;
+    if (_cachedAt != null) {
+      return "Offline: rekap terakhir pukul ${DateFormat('HH:mm').format(_cachedAt!.toLocal())}"
+          "${unsent > 0 ? ', belum termasuk $unsent transaksi yang belum terkirim' : ''}.";
+    }
+    if (unsent > 0) {
+      return "$unsent transaksi belum terkirim ke server dan belum masuk rekap.";
+    }
+    return null;
+  }
+
+  /// Tutup shift butuh semua transaksi sudah di server dan rekap terbaru
+  Future<void> _startCloseShift(ThemeProvider theme) async {
+    setState(() => _isLoading = true);
+    await SyncService().syncNow();
+    await _fetchRecap();
+    if (!mounted) return;
+    if (_cachedAt != null) {
+      _showSnackBar(
+          "Tutup shift butuh koneksi ke server. Sambungkan internet lalu coba lagi.",
+          error: true);
+      return;
+    }
+    if (SyncService().pendingCount > 0) {
+      _showSnackBar(
+          "Masih ada ${SyncService().pendingCount} transaksi yang belum terkirim. Tunggu sampai terkirim, lalu tutup shift.",
+          error: true);
+      return;
+    }
+    _showSettlementDialog(theme);
   }
 
   void _showSnackBar(String message, {bool error = false, bool success = false}) {
@@ -120,7 +180,7 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
     if (!mounted) return;
     setState(() => _isLoading = true);
 
-    final res = await _apiService.closeSettlement(notes, actualCash: actualCash);
+    final res = await PosService().closeShift(notes, actualCash: actualCash);
 
     if (res['status'] != 'success') {
       if (mounted) setState(() => _isLoading = false);
@@ -291,7 +351,10 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
     final DateTime? openedAt =
         DateTime.tryParse(settlement['opened_at']?.toString() ?? '');
     if (openedAt == null) return "Shift yang sedang berjalan";
-    return "${settlement['cashier'] ?? ''} · buka ${DateFormat('d MMM, HH:mm', 'id').format(openedAt)} · ${summary['total_bills'] ?? 0} bill";
+    final String base =
+        "${settlement['cashier'] ?? ''} · buka ${DateFormat('d MMM, HH:mm', 'id').format(openedAt)} · ${summary['total_bills'] ?? 0} bill";
+    final String? stale = _staleNote();
+    return stale == null ? base : "$base\n$stale";
   }
 
   Widget _printMenu(ThemeProvider theme, {required bool compact}) {
@@ -475,7 +538,7 @@ class _SalesRecapPageState extends State<SalesRecapPage> {
       style: ElevatedButton.styleFrom(backgroundColor: theme.dangerColor),
       onPressed: _recapData == null || _isPrinting
           ? null
-          : () => _showSettlementDialog(theme),
+          : () => _startCloseShift(theme),
       icon: const Icon(Icons.lock_clock_outlined, size: 20),
       label: const Text("Tutup shift", style: TextStyle(fontSize: 15)),
     );

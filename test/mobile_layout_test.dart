@@ -20,6 +20,7 @@ import 'package:pos_babi_guling/providers/cart_provider.dart';
 import 'package:pos_babi_guling/providers/nav_provider.dart';
 import 'package:pos_babi_guling/providers/theme_provider.dart';
 import 'package:pos_babi_guling/services/printer_service.dart';
+import 'package:pos_babi_guling/services/sync_service.dart';
 import 'package:pos_babi_guling/views/login_page.dart';
 import 'package:pos_babi_guling/views/main_layout.dart';
 import 'package:pos_babi_guling/views/printer_settings_page.dart';
@@ -157,7 +158,10 @@ Object _apiResponse(String method, String path) {
       'data': _menu(2, 1, 'Porsi Pisah', 35000, stock: 0),
     };
   }
-  if (method == 'POST' && RegExp(r'^/api/orders/\d+/items$').hasMatch(path)) {
+  if (method == 'POST' && path == '/api/orders') {
+    return {'status': 'success', 'data': _order(9, 'pending', 'dine_in', method: null)};
+  }
+  if (method == 'POST' && RegExp(r'^/api/orders/[\w-]+/items$').hasMatch(path)) {
     final order = _order(7, 'pending', 'dine_in', method: null, total: 121000);
     return {
       'status': 'success',
@@ -240,9 +244,15 @@ Object _apiResponse(String method, String path) {
   return {'status': 'error', 'message': 'Tidak dikenal: $path'};
 }
 
-final MockClient _mockApi = MockClient((request) async => http.Response(
-    jsonEncode(_apiResponse(request.method, request.url.path)), 200,
-    headers: {'content-type': 'application/json'}));
+/// true = server tidak terjangkau (sinyal hilang)
+bool _offline = false;
+
+final MockClient _mockApi = MockClient((request) async {
+  if (_offline) throw http.ClientException('Network is unreachable');
+  return http.Response(
+      jsonEncode(_apiResponse(request.method, request.url.path)), 200,
+      headers: {'content-type': 'application/json'});
+});
 
 Future<void> _loadFonts() async {
   ByteData read(String path) =>
@@ -333,9 +343,13 @@ void main() {
     await _loadFonts();
     await initializeDateFormatting('id');
     PrinterService.debugDisabled = true;
+    SyncService.periodic = false;
   });
 
   setUp(() {
+    _offline = false;
+    SyncService().debugReset();
+    PrinterService().debugReset();
     SharedPreferences.setMockInitialValues(
         {'token': 'uji', 'user_name': 'Kasir A', 'role': 'cashier'});
     _mockPlugins();
@@ -478,6 +492,67 @@ void main() {
       expect(find.text('Printer Ceker Dapur'), findsOneWidget);
       expect(find.text('Buka pengaturan Bluetooth'), findsOneWidget);
       await _shot(tester, '15_printer');
+    }, () => _mockApi);
+  });
+
+  testWidgets('HP: kasir tetap jalan saat offline', (tester) async {
+    _setSize(tester, const Size(360, 760));
+
+    await http.runWithClient(() async {
+      // Sempat online: menu & bill tersimpan di perangkat
+      await tester.pumpWidget(_app(const MainLayout()));
+      await _settle(tester);
+      expect(find.textContaining('Offline'), findsNothing);
+
+      _offline = true;
+      await tester.tap(find.text('Nasi Babi Guling Spesial Komplit'));
+      await _settle(tester);
+      await tester.tap(find.text('Lihat pesanan'));
+      await _settle(tester);
+      await tester.enterText(find.widgetWithText(TextField, 'Meja'), '3');
+      await tester.tap(find.text('Bayar'));
+      await _settle(tester);
+      await tester.scrollUntilVisible(find.text('Uang pas'), 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.tap(find.text('Uang pas'));
+      await _settle(tester);
+      await tester.scrollUntilVisible(find.text('Konfirmasi pembayaran'), 200,
+          scrollable: find.byType(Scrollable).first);
+      await tester.tap(find.text('Konfirmasi pembayaran'));
+      await tester.pump();
+      // Cetak memuat profil printer dari aset (I/O sungguhan): tunggu
+      // sampai dialog muncul, bisa lebih lama saat semua test jalan bersamaan
+      for (int i = 0;
+          i < 40 && find.text('Pembayaran berhasil').evaluate().isEmpty;
+          i++) {
+        await tester.runAsync(
+            () => Future.delayed(const Duration(milliseconds: 250)));
+        await tester.pump(const Duration(seconds: 1));
+      }
+      await _settle(tester);
+
+      expect(find.text('Pembayaran berhasil'), findsOneWidget);
+      expect(find.textContaining('Sedang offline'), findsOneWidget);
+      await _shot(tester, '30_offline_bayar');
+      await tester.tap(find.text('Kembali ke kasir'));
+      await _settle(tester);
+
+      // Status antrean tampil di atas halaman
+      expect(find.text('Offline · 1 transaksi menunggu dikirim'), findsOneWidget);
+      await tester.tap(find.text('Detail'));
+      await _settle(tester);
+      expect(find.text('Pengiriman ke server'), findsOneWidget);
+      expect(find.textContaining('Pesanan INV-'), findsOneWidget);
+      await _shot(tester, '31_offline_antrean');
+
+      // Sinyal kembali: terkirim, status hilang
+      _offline = false;
+      await tester.tap(find.text('Kirim sekarang'));
+      await _settle(tester);
+      expect(find.text('Semua transaksi sudah terkirim.'), findsOneWidget);
+      await tester.tapAt(const Offset(180, 40));
+      await _settle(tester);
+      expect(find.textContaining('menunggu dikirim'), findsNothing);
     }, () => _mockApi);
   });
 

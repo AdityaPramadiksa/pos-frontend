@@ -31,15 +31,24 @@ class PrinterService {
   // Plugin Bluetooth hanya bisa memegang SATU koneksi. Untuk 2 printer,
   // koneksi dipindah bergantian, dan semua cetakan diantre supaya tidak bentrok.
   String? _activeMac;
-  Future<void> _queue = Future.value();
+  Future<void>? _queue;
 
   /// MAC printer yang sedang tersambung (sepengetahuan aplikasi)
   String? get activeMac => _activeMac;
 
   Future<T> _serialize<T>(Future<T> Function() job) {
-    final Future<T> result = _queue.then((_) => job());
+    final Future<void>? previous = _queue;
+    final Future<T> result =
+        previous == null ? job() : previous.then((_) => job());
     _queue = result.then((_) {}, onError: (_) {});
     return result;
+  }
+
+  /// Kosongkan antrean cetak (antar test, supaya tidak tersangkut)
+  @visibleForTesting
+  void debugReset() {
+    _queue = null;
+    _activeMac = null;
   }
 
   // --- PENGATURAN PRINTER ---
