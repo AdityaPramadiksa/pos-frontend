@@ -38,6 +38,9 @@ class _LoginPageState extends State<LoginPage> {
     setState(() => _isLoading = false);
 
     if (result['status'] == 'success') {
+      if (result['offline'] == true) {
+        showMessage(context, result['message']);
+      }
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (context) => const MainLayout()),
@@ -49,42 +52,87 @@ class _LoginPageState extends State<LoginPage> {
     }
   }
 
-  // Ganti alamat server tanpa build ulang (IP laptop berubah saat pindah WiFi)
+  // Ganti alamat server tanpa build ulang: alamat hosting, atau IP laptop
+  // di WiFi warung (berubah saat pindah WiFi)
   void _showServerDialog() {
     final controller = TextEditingController(text: ApiService.ipAddress);
+    String? testResult;
+    bool testing = false;
 
     showDialog(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text("Alamat server"),
-        content: SizedBox(
-          width: 360,
-          child: TextField(
-            controller: controller,
-            autofocus: true,
-            keyboardType: TextInputType.url,
-            decoration: const InputDecoration(
-              labelText: "IP laptop server",
-              hintText: "Contoh: 192.168.1.10",
-              helperText: "Port 8000 dipakai bila tidak ditulis.",
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialog) => AlertDialog(
+          title: const Text("Alamat server"),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: controller,
+                  autofocus: true,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    labelText: "Alamat server",
+                    hintText: "pos.namawarung.com atau 192.168.1.10",
+                    helperText:
+                        "Nama domain memakai https. IP memakai port 8000 bila tidak ditulis.",
+                    helperMaxLines: 2,
+                  ),
+                ),
+                if (testResult != null) ...[
+                  const SizedBox(height: 12),
+                  Text(testResult!,
+                      style: TextStyle(
+                          color: testResult!.startsWith('Tersambung')
+                              ? Provider.of<ThemeProvider>(context,
+                                      listen: false)
+                                  .successColor
+                              : Provider.of<ThemeProvider>(context,
+                                      listen: false)
+                                  .dangerColor)),
+                ],
+              ],
             ),
           ),
+          actions: [
+            TextButton(
+              onPressed: testing
+                  ? null
+                  : () async {
+                      final String previous = ApiService.ipAddress;
+                      setDialog(() => testing = true);
+                      ApiService.ipAddress = controller.text.trim();
+                      final bool ok = await ApiService().ping();
+                      final String url = ApiService.serverRoot;
+                      ApiService.ipAddress = previous;
+                      if (!dialogContext.mounted) return;
+                      setDialog(() {
+                        testing = false;
+                        testResult = ok
+                            ? "Tersambung ke $url"
+                            : "Tidak tersambung ke $url";
+                      });
+                    },
+              child: Text(testing ? "Mengecek…" : "Tes koneksi"),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text("Batal"),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                await ApiService.saveServerAddress(controller.text);
+                if (!dialogContext.mounted) return;
+                Navigator.pop(dialogContext);
+                setState(() {});
+              },
+              child: const Text("Simpan"),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text("Batal"),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              await ApiService.saveServerAddress(controller.text);
-              if (!dialogContext.mounted) return;
-              Navigator.pop(dialogContext);
-              setState(() {});
-            },
-            child: const Text("Simpan"),
-          ),
-        ],
       ),
     );
   }

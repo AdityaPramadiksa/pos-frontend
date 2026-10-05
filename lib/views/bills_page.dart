@@ -4,7 +4,8 @@ import 'package:intl/intl.dart';
 import '../providers/cart_provider.dart';
 import '../providers/nav_provider.dart';
 import '../providers/theme_provider.dart';
-import '../services/api_service.dart';
+import '../services/pos_service.dart';
+import '../services/sync_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
 import '../utils/responsive.dart';
@@ -19,26 +20,47 @@ class BillsPage extends StatefulWidget {
 }
 
 class _BillsPageState extends State<BillsPage> {
-  final ApiService _apiService = ApiService();
-  List<dynamic> _pendingBills = [];
+  final PosService _pos = PosService();
+  List<Map<String, dynamic>> _pendingBills = [];
   bool _isLoading = true;
+  bool _fresh = true;
+  int _syncedTick = 0;
 
   @override
   void initState() {
     super.initState();
+    _syncedTick = SyncService().syncedTick;
+    SyncService().addListener(_onSync);
+    _fetchBills();
+  }
+
+  @override
+  void dispose() {
+    SyncService().removeListener(_onSync);
+    super.dispose();
+  }
+
+  // Bill yang dibuat/dilunasi offline baru saja terkirim: muat ulang
+  void _onSync() {
+    if (SyncService().syncedTick == _syncedTick) return;
+    _syncedTick = SyncService().syncedTick;
     _fetchBills();
   }
 
   Future<void> _fetchBills() async {
     if (!mounted) return;
     setState(() => _isLoading = _pendingBills.isEmpty);
-    final bills = await _apiService.getPendingBills();
+    final res = await _pos.pendingBills();
     if (!mounted) return;
     setState(() {
-      _pendingBills = bills;
+      _pendingBills = res.items;
+      _fresh = res.fresh;
       _isLoading = false;
     });
   }
+
+  bool _isLocal(Map<String, dynamic> bill) =>
+      SyncService().touchedBillKeys.contains(PosService.billKey(bill));
 
   String _billTitle(dynamic bill) {
     final String table = bill['table_number']?.toString() ?? '';
@@ -214,9 +236,10 @@ class _BillsPageState extends State<BillsPage> {
           children: [
             PageHeader(
               title: "Bill belum dibayar",
-              subtitle: _pendingBills.isEmpty
-                  ? "Semua bill sudah lunas"
-                  : "${_pendingBills.length} bill · total ${rupiah(total)}",
+              subtitle: (_pendingBills.isEmpty
+                      ? "Semua bill sudah lunas"
+                      : "${_pendingBills.length} bill · total ${rupiah(total)}") +
+                  (_fresh ? "" : " · offline, bill dari HP lain tidak terlihat"),
               compact: mobile,
               actions: [
                 IconButton(
@@ -281,6 +304,14 @@ class _BillsPageState extends State<BillsPage> {
               Row(
                 children: [
                   StatusChip(_billTitle(bill), tone: ChipTone.warning),
+                  if (_isLocal(bill)) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: "Belum terkirim ke server",
+                      child: Icon(Icons.cloud_off_outlined,
+                          size: 16, color: theme.faintTextColor),
+                    ),
+                  ],
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text("sejak ${_billTime(bill)}",

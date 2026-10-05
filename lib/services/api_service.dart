@@ -4,21 +4,52 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/menu_model.dart';
 import '../models/category_model.dart';
 import '../models/discount_model.dart';
-import 'package:image_picker/image_picker.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'local_store.dart';
+import 'sync_service.dart';
+
+/// Hasil GET yang bisa berasal dari server atau dari salinan di perangkat
+class ListResult {
+  final List<dynamic> data;
+
+  /// true = data terbaru dari server, false = salinan terakhir (offline)
+  final bool fresh;
+  final DateTime? savedAt;
+
+  const ListResult(this.data, {required this.fresh, this.savedAt});
+}
 
 class ApiService {
-// 1. IP server (Laravel) bawaan. Bisa diganti dari halaman login (ikon gear)
-//    tanpa build ulang, mis. saat laptop pindah WiFi dan IP-nya berubah.
+  // 1. Alamat server bawaan. Bisa diganti dari halaman login tanpa build ulang.
+  //    Boleh berupa IP laptop di WiFi warung ("192.168.1.10", port 8000) atau
+  //    alamat hosting ("https://pos.namawarung.com").
   static const String defaultIpAddress = "192.168.18.8";
   static const String _serverPrefKey = 'server_address';
   static String ipAddress = defaultIpAddress;
 
-  // 2. Alamat boleh "192.168.1.10" (port 8000) atau lengkap "192.168.1.10:8080"
-  static String get _host =>
-      ipAddress.contains(':') ? ipAddress : "$ipAddress:8000";
-  static String get baseUrl => "http://$_host/api";
-  static String get baseStorageUrl => "http://$_host/storage/";
+  /// Alamat lengkap server tanpa garis miring di akhir.
+  /// IP/localhost tanpa skema -> http dengan port 8000 (php artisan serve),
+  /// nama domain tanpa skema -> https (hosting).
+  static String get serverRoot {
+    String address = ipAddress.trim();
+    if (!address.startsWith('http://') && !address.startsWith('https://')) {
+      final String hostPart = address.split('/').first;
+      final String host = hostPart.split(':').first;
+      final bool local = host == 'localhost' ||
+          host.endsWith('.local') ||
+          RegExp(r'^\d{1,3}(\.\d{1,3}){3}$').hasMatch(host);
+      if (local) {
+        final String withPort =
+            hostPart.contains(':') ? hostPart : '$hostPart:8000';
+        address = 'http://${address.replaceFirst(hostPart, withPort)}';
+      } else {
+        address = 'https://$address';
+      }
+    }
+    return address.replaceFirst(RegExp(r'/+$'), '');
+  }
+
+  static String get baseUrl => "$serverRoot/api";
+  static String get baseStorageUrl => "$serverRoot/storage/";
 
   /// Dipanggil sekali saat aplikasi dibuka
   static Future<void> loadServerAddress() async {
@@ -29,23 +60,23 @@ class ApiService {
   static Future<void> saveServerAddress(String address) async {
     address = address
         .trim()
-        .replaceFirst(RegExp(r'^https?://'), '')
-        .replaceFirst(RegExp(r'/.*$'), '');
+        .replaceFirst(RegExp(r'/+$'), '')
+        .replaceFirst(RegExp(r'/api$'), '');
     if (address.isEmpty) address = defaultIpAddress;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_serverPrefKey, address);
     ipAddress = address;
   }
 
-  static const Duration _timeout = Duration(seconds: 20);
+  static const Duration _timeout = Duration(seconds: 15);
 
   Future<String?> _getToken() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     return prefs.getString('token');
   }
 
-  Future<Map<String, String>> _headers({bool json = false}) async {
-    String? token = await _getToken();
+  Future<Map<String, String>> _headers({bool json = false, String? token}) async {
+    token ??= await _getToken();
     return {
       if (json) 'Content-Type': 'application/json',
       'Accept': 'application/json',
@@ -55,33 +86,38 @@ class ApiService {
 
   // Error validasi Laravel (422) tidak punya key 'status', jadi kita lengkapi
   // di sini supaya semua halaman cukup mengecek res['status'] == 'success'.
+  // '_http' = kode HTTP, dipakai antrean offline untuk memutuskan kirim ulang.
   Map<String, dynamic> _decode(http.Response response) {
+    SyncService().markReachable(true);
+    final bool ok = response.statusCode >= 200 && response.statusCode < 300;
     try {
       final decoded = json.decode(response.body);
       if (decoded is Map<String, dynamic>) {
-        decoded['status'] ??=
-            (response.statusCode >= 200 && response.statusCode < 300)
-                ? 'success'
-                : 'error';
+        decoded['status'] ??= ok ? 'success' : 'error';
+        if (!ok) decoded['status'] = 'error';
+        if (response.statusCode == 401) {
+          decoded['message'] = 'Sesi berakhir. Silakan keluar lalu masuk lagi dengan PIN.';
+        }
+        decoded['_http'] = response.statusCode;
         return decoded;
       }
     } catch (_) {}
     return {
       'status': 'error',
+      '_http': response.statusCode,
       'message': 'Respon server tidak valid (${response.statusCode})',
     };
   }
 
-  // Pesan yang bisa dipahami kasir, bukan teks exception mentah
-  String _connectionError(Object e) {
-    final String text = e.toString();
-    if (text.contains('Timeout') ||
-        text.contains('SocketException') ||
-        text.contains('ClientException') ||
-        text.contains('Connection')) {
-      return 'Server tidak terjangkau ($ipAddress). Cek WiFi & alamat server di ikon gear halaman login.';
-    }
-    return 'Koneksi gagal: $text';
+  // Server tidak terjangkau: sinyal hilang, WiFi mati, atau alamat salah
+  Map<String, dynamic> _offline(Object e) {
+    SyncService().markReachable(false);
+    return {
+      'status': 'error',
+      'offline': true,
+      '_http': 0,
+      'message': 'Tidak tersambung ke server ($ipAddress). Periksa internet.',
+    };
   }
 
   // --- HELPER PRIVATE UNTUK REQUEST GET ---
@@ -92,7 +128,7 @@ class ApiService {
           .timeout(_timeout);
       return _decode(response);
     } catch (e) {
-      return {'status': 'error', 'message': _connectionError(e)};
+      return _offline(e);
     }
   }
 
@@ -111,20 +147,104 @@ class ApiService {
           .timeout(_timeout);
       return _decode(response);
     } catch (e) {
-      return {'status': 'error', 'message': _connectionError(e)};
+      return _offline(e);
     }
   }
 
-  Future<List<dynamic>> _getList(String endpoint) async {
+  /// GET daftar. Berhasil -> disimpan di perangkat. Server tidak terjangkau
+  /// -> salinan terakhir yang tersimpan.
+  Future<ListResult> _getCachedList(String endpoint, String cacheName) async {
     final res = await _get(endpoint);
     if (res['status'] == 'success' && res['data'] is List) {
-      return res['data'];
+      await LocalStore.cachePut(cacheName, res['data']);
+      return ListResult(res['data'], fresh: true, savedAt: DateTime.now());
     }
-    return [];
+    final cached = await LocalStore.cacheGet(cacheName);
+    return ListResult(
+      cached?['data'] is List ? cached!['data'] : const [],
+      fresh: false,
+      savedAt: DateTime.tryParse(cached?['saved_at']?.toString() ?? ''),
+    );
   }
 
-  // 1. Login PIN
+  /// GET objek dengan salinan di perangkat. Hasil salinan diberi
+  /// 'cached': true dan 'saved_at'.
+  Future<Map<String, dynamic>> _getCachedMap(
+      String endpoint, String cacheName) async {
+    final res = await _get(endpoint);
+    if (res['status'] == 'success') {
+      await LocalStore.cachePut(cacheName, res['data']);
+      return res;
+    }
+    if (res['offline'] != true) return res;
+    final cached = await LocalStore.cacheGet(cacheName);
+    if (cached == null || cached['data'] == null) return res;
+    return {
+      'status': 'success',
+      'cached': true,
+      'saved_at': cached['saved_at'],
+      'data': cached['data'],
+    };
+  }
+
+  /// Kirim perintah dari antrean offline. Mengembalikan '_http' = 0 bila
+  /// server tidak terjangkau.
+  Future<Map<String, dynamic>> send(
+    String path,
+    Map<String, dynamic> body, {
+    required String token,
+    bool multipart = false,
+    List<int>? fileBytes,
+    String? fileName,
+    String fileField = 'receipt_image',
+    Duration? timeout,
+  }) async {
+    try {
+      final uri = Uri.parse('$baseUrl$path');
+      if (!multipart) {
+        final response = await http
+            .post(uri,
+                headers: await _headers(json: true, token: token),
+                body: json.encode(body))
+            .timeout(timeout ?? _timeout);
+        return _decode(response);
+      }
+
+      final request = http.MultipartRequest('POST', uri);
+      request.headers.addAll(await _headers(token: token));
+      body.forEach((key, value) {
+        if (value != null) request.fields[key] = value.toString();
+      });
+      if (fileBytes != null) {
+        request.files.add(http.MultipartFile.fromBytes(fileField, fileBytes,
+            filename: fileName ?? 'nota.jpg'));
+      }
+      final streamed = await request.send().timeout(const Duration(seconds: 40));
+      return _decode(await http.Response.fromStream(streamed));
+    } catch (e) {
+      return _offline(e);
+    }
+  }
+
+  /// Cek server bisa dihubungi (tanpa token)
+  Future<bool> ping() async {
+    try {
+      final response = await http
+          .get(Uri.parse('$baseUrl/ping'), headers: {'Accept': 'application/json'})
+          .timeout(const Duration(seconds: 8));
+      final bool ok = response.statusCode == 200;
+      SyncService().markReachable(ok);
+      return ok;
+    } catch (_) {
+      SyncService().markReachable(false);
+      return false;
+    }
+  }
+
+  // 1. Login PIN. Tanpa internet, PIN yang pernah masuk di perangkat ini
+  //    tetap bisa dipakai.
   Future<Map<String, dynamic>> loginPin(String pin) async {
+    final prefs = await SharedPreferences.getInstance();
     try {
       final response = await http
           .post(
@@ -133,99 +253,93 @@ class ApiService {
               'Content-Type': 'application/json',
               'Accept': 'application/json',
             },
-            body: json.encode({'pin': pin}),
+            body: json.encode({
+              'pin': pin,
+              'device_id': await LocalStore.deviceCode(),
+            }),
           )
           .timeout(_timeout);
       final data = _decode(response);
       if (response.statusCode == 200 && data['data'] != null) {
-        SharedPreferences prefs = await SharedPreferences.getInstance();
-        await prefs.setString('token', data['data']['token'].toString());
-        await prefs.setString(
-          'user_name',
-          data['data']['user']['name'].toString(),
-        );
-        await prefs.setString('role', data['data']['user']['role'].toString());
+        final Map<String, dynamic> user =
+            Map<String, dynamic>.from(data['data']['user']);
+        final String token = data['data']['token'].toString();
+        await _saveSession(prefs, user, token);
+        await LocalStore.rememberLogin(pin, user, token);
+        await SyncService().reauthorize(user['id'], token);
+      } else if (response.statusCode == 401) {
+        await LocalStore.forgetLogin(pin);
+        data['message'] = 'PIN salah. Coba lagi atau tanyakan PIN ke admin.';
       }
       return data;
     } catch (e) {
-      return {'status': 'error', 'message': _connectionError(e)};
+      _offline(e);
+      final saved = await LocalStore.findLogin(pin);
+      if (saved == null) {
+        return {
+          'status': 'error',
+          'offline': true,
+          'message':
+              'Tidak tersambung ke server. PIN ini belum pernah dipakai masuk di perangkat ini, jadi belum bisa dipakai tanpa internet.',
+        };
+      }
+      await _saveSession(
+        prefs,
+        {'id': saved['user_id'], 'name': saved['name'], 'role': saved['role']},
+        saved['token'].toString(),
+      );
+      return {
+        'status': 'success',
+        'offline': true,
+        'message': 'Masuk tanpa internet. Transaksi dikirim saat sinyal kembali.',
+      };
     }
   }
 
-  // 1b. Logout (shift tetap terbuka, hanya token yang dihapus)
+  Future<void> _saveSession(
+      SharedPreferences prefs, Map<String, dynamic> user, String token) async {
+    await prefs.setString('token', token);
+    await prefs.setString('user_name', user['name']?.toString() ?? 'Kasir');
+    await prefs.setString('role', user['role']?.toString() ?? 'cashier');
+    final int? id = int.tryParse(user['id']?.toString() ?? '');
+    if (id != null) {
+      await prefs.setInt('user_id', id);
+    } else {
+      await prefs.remove('user_id');
+    }
+  }
+
+  // 1b. Keluar. Token di server sengaja tidak dicabut: transaksi offline
+  //     kasir ini masih memakainya untuk terkirim nanti. Shift tetap terbuka.
   Future<void> logout() async {
-    await _post('/logout', {});
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.remove('token');
   }
 
   // 2. Ambil Kategori
   Future<List<CategoryModel>> getCategories() async {
-    final data = await _getList('/categories');
-    return data.map((item) => CategoryModel.fromJson(item)).toList();
+    final res = await _getCachedList('/categories', 'categories');
+    return res.data.map((item) => CategoryModel.fromJson(item)).toList();
   }
 
-  // 3. Ambil Menu
+  // 3. Ambil Menu (data mentah, stok disesuaikan antrean oleh PosService)
+  Future<ListResult> getMenusRaw() => _getCachedList('/menus', 'menus');
+
   Future<List<MenuModel>> getMenus() async {
-    final data = await _getList('/menus');
-    return data.map((item) => MenuModel.fromJson(item)).toList();
+    final res = await getMenusRaw();
+    return res.data.map((item) => MenuModel.fromJson(item)).toList();
   }
 
   // 4. Ambil Diskon
   Future<List<DiscountModel>> getDiscounts() async {
-    final data = await _getList('/discounts');
-    return data.map((item) => DiscountModel.fromJson(item)).toList();
+    final res = await _getCachedList('/discounts', 'discounts');
+    return res.data.map((item) => DiscountModel.fromJson(item)).toList();
   }
 
-  // 4b. Pengaturan toko (tarif pajak)
+  // 4b. Pengaturan toko (isi struk, pajak, batas stok)
   Future<Map<String, dynamic>> getSettings() => _get('/settings');
 
-  // 5. Simpan Transaksi
-  // isPending = true  -> simpan ke meja (belum bayar)
-  // amountPaid        -> uang tunai yang diterima (khusus cash)
-  Future<Map<String, dynamic>> saveTransaction({
-    required List<dynamic> items,
-    required String orderType,
-    String? paymentMethod,
-    String deliveryPlatform = '',
-    String customerName = 'Pelanggan Umum',
-    String tableNumber = '-',
-    int? discountId,
-    int? amountPaid,
-    bool isPending = false,
-  }) async {
-    String formattedOrderType = orderType.toLowerCase().trim().replaceAll(
-          ' ',
-          '_',
-        );
-    if (formattedOrderType.contains('dine')) formattedOrderType = 'dine_in';
-    if (formattedOrderType.contains('go')) formattedOrderType = 'to_go';
-    if (formattedOrderType.contains('deliv')) formattedOrderType = 'delivery';
-
-    return await _post('/orders', {
-      "order_type": formattedOrderType,
-      if (formattedOrderType == 'delivery')
-        "delivery_platform": deliveryPlatform.toLowerCase(),
-      if (!isPending && paymentMethod != null)
-        "payment_method": paymentMethod.toLowerCase(),
-      "is_pending": isPending,
-      "customer_name": customerName,
-      "table_number": tableNumber,
-      if (amountPaid != null) "amount_paid": amountPaid,
-      "discount_id": discountId,
-      "items": items
-          .map(
-            (item) => {
-              "menu_id": item.menu.id,
-              "qty": item.quantity,
-              "note": item.note,
-            },
-          )
-          .toList(),
-    });
-  }
-
-  // 6. Settlement Status
+  // 6. Settlement Status (membuka shift otomatis di server)
   Future<Map<String, dynamic>> checkSettlementStatus() =>
       _get('/settlement/status');
 
@@ -239,23 +353,25 @@ class ApiService {
       if (actualCash != null) 'actual_cash': actualCash,
     });
 
-    if (response['status'] == 'success') {
-      return response;
-    } else {
-      return {
-        'status': 'error',
-        'message': response['message'] ?? 'Gagal menutup shift'
-      };
-    }
+    if (response['status'] == 'success') return response;
+    return {
+      'status': 'error',
+      'offline': response['offline'],
+      'message': response['offline'] == true
+          ? 'Tutup shift butuh koneksi ke server. Sambungkan internet lalu coba lagi.'
+          : response['message'] ?? 'Gagal menutup shift',
+    };
   }
 
   // 7b. Laporan shift terakhir yang sudah ditutup (cetak ulang)
-  Future<Map<String, dynamic>> getLastSettlement() => _get('/settlement/last');
+  Future<Map<String, dynamic>> getLastSettlement() =>
+      _getCachedMap('/settlement/last', 'settlement_last');
 
-  // 8. Order History
-  Future<List<dynamic>> getOrderHistory() => _getList('/orders/history');
+  // 8. Order History (hari ini)
+  Future<ListResult> getOrderHistory() =>
+      _getCachedList('/orders/history', 'order_history');
 
-  // 9. Void Order
+  // 9. Void Order (wajib online: PIN admin dicek server)
   Future<Map<String, dynamic>> voidOrder(
     int orderId,
     String pin,
@@ -269,83 +385,12 @@ class ApiService {
 
   // 10. Sales Recap (shift yang sedang berjalan)
   Future<Map<String, dynamic>> getSalesRecapitulation() =>
-      _get('/orders/recapitulation');
+      _getCachedMap('/orders/recapitulation', 'recap');
 
   // 11. Pending Bills
-  Future<List<dynamic>> getPendingBills() => _getList('/orders/pending');
-
-// 12. Pay Pending
-  Future<Map<String, dynamic>> payPendingBill(
-    int orderId,
-    String paymentMethod,
-    int? amountPaid,
-  ) async {
-    return await _post('/orders/$orderId/pay', {
-      'payment_method': paymentMethod.toLowerCase(),
-      // Kalau amountPaid ada nilainya kirim, kalau tidak jangan kirim
-      if (amountPaid != null) 'amount_paid': amountPaid,
-    });
-  }
-
-  // 12b. Tambah pesanan ke bill yang belum dibayar
-  Future<Map<String, dynamic>> addItemsToBill(
-      int orderId, List<dynamic> items) async {
-    return await _post('/orders/$orderId/items', {
-      "items": items
-          .map((item) => {
-                "menu_id": item.menu.id,
-                "qty": item.quantity,
-                "note": item.note,
-              })
-          .toList(),
-    });
-  }
-
-  // 12c. Ubah sisa stok menu dari kasir (0 = habis)
-  Future<Map<String, dynamic>> updateStock(int menuId, int stock) =>
-      _post('/menus/$menuId/stock', {'stock': stock});
-
-  // 13. Petty Cash Add
-  Future<Map<String, dynamic>> addExpense({
-    required int amount,
-    required String description,
-    XFile? imageFile,
-  }) async {
-    try {
-      String? token = await _getToken();
-      var uri = Uri.parse('$baseUrl/expenses');
-      var request = http.MultipartRequest('POST', uri);
-      request.headers.addAll({
-        'Authorization': 'Bearer $token',
-        'Accept': 'application/json',
-      });
-      request.fields['amount'] = amount.toString();
-      request.fields['description'] = description;
-
-      if (imageFile != null) {
-        if (kIsWeb) {
-          var bytes = await imageFile.readAsBytes();
-          request.files.add(
-            http.MultipartFile.fromBytes(
-              'receipt_image',
-              bytes,
-              filename: imageFile.name,
-            ),
-          );
-        } else {
-          request.files.add(
-            await http.MultipartFile.fromPath('receipt_image', imageFile.path),
-          );
-        }
-      }
-      var streamedResponse = await request.send().timeout(_timeout);
-      var response = await http.Response.fromStream(streamedResponse);
-      return _decode(response);
-    } catch (e) {
-      return {'status': 'error', 'message': e.toString()};
-    }
-  }
+  Future<ListResult> getPendingBills() =>
+      _getCachedList('/orders/pending', 'pending_bills');
 
   // 14. Petty Cash List (shift yang sedang berjalan)
-  Future<Map<String, dynamic>> getExpenses() => _get('/expenses');
+  Future<ListResult> getExpenses() => _getCachedList('/expenses', 'expenses');
 }

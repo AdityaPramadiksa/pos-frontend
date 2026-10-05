@@ -23,6 +23,10 @@ class CartProvider with ChangeNotifier {
   int? _currentOrderId;
   int? get currentOrderId => _currentOrderId;
 
+  // Bill yang sedang dilunasi (bisa bill offline yang belum punya id server)
+  Map<String, dynamic>? _currentBill;
+  Map<String, dynamic>? get currentBill => _currentBill;
+
   String _customerName = "Pelanggan Umum";
   String _tableNumber = "";
   String _orderType = 'dine_in';
@@ -38,16 +42,16 @@ class CartProvider with ChangeNotifier {
 
   // Mode "tambah pesanan ke bill": keranjang hanya berisi item tambahan
   // untuk bill [appendOrderId] (mis. meja yang pesan lagi).
-  int? _appendOrderId;
+  Map<String, dynamic>? _appendBill;
   String _appendLabel = "";
-  int? get appendOrderId => _appendOrderId;
+  Map<String, dynamic>? get appendBill => _appendBill;
   String get appendLabel => _appendLabel;
-  bool get isAppending => _appendOrderId != null;
+  bool get isAppending => _appendBill != null;
 
   /// Mulai menambah pesanan ke bill yang belum dibayar
   void startAppend(Map<String, dynamic> bill) {
     clearCart();
-    _appendOrderId = bill['id'];
+    _appendBill = Map<String, dynamic>.from(bill);
     _orderType = (bill['order_type'] ?? 'dine_in').toString();
     _deliveryPlatform = bill['delivery_platform']?.toString() ?? "";
     _tableNumber = bill['table_number']?.toString() ?? "";
@@ -122,8 +126,9 @@ class CartProvider with ChangeNotifier {
     _items.clear();
     _selectedDiscount = null;
     _currentOrderId = null;
+    _currentBill = null;
     _billTotals = null;
-    _appendOrderId = null;
+    _appendBill = null;
     _appendLabel = "";
     _customerName = "Pelanggan Umum";
     _tableNumber = "";
@@ -211,7 +216,8 @@ class CartProvider with ChangeNotifier {
     _orderType = (bill['order_type'] ?? 'dine_in').toString().toLowerCase();
     _deliveryPlatform = bill['delivery_platform']?.toString() ?? "";
     _paymentMethod = _orderType == 'delivery' ? 'delivery' : 'cash';
-    _currentOrderId = bill['id'];
+    _currentOrderId = bill['id'] is int ? bill['id'] : null;
+    _currentBill = Map<String, dynamic>.from(bill);
     _billTotals = {
       'subtotal': toInt(bill['subtotal']),
       'tax': toInt(bill['tax_amount']),

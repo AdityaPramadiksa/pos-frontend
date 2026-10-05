@@ -13,6 +13,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   http: ^1.1.0
   shared_preferences: ^2.2.0
+  crypto: ^3.0.3
 
   # 🔥 INI KITA GANTI: Plugin lama dibuang, pakai yang baru yang anti-rewel 🔥
   print_bluetooth_thermal: ^1.0.8

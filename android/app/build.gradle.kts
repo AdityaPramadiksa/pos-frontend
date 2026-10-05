@@ -1,7 +1,17 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Kunci tanda tangan rilis (android/key.properties, tidak ikut git).
+// Tanpa file itu, build rilis memakai kunci debug.
+val keystorePropertiesFile = rootProject.file("key.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -21,7 +31,9 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.pos_babi_guling"
+        // ID aplikasi di HP. Jangan diubah lagi setelah dipasang di kasir,
+        // kalau berubah dianggap aplikasi lain (data offline tidak terbawa).
+        applicationId = "com.mengede.kasir"
         
         // Mengambil versi minimal dari Flutter (biasanya 21)
         minSdk = flutter.minSdkVersion 
@@ -33,9 +45,23 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (keystorePropertiesFile.exists())
+                signingConfigs.getByName("release")
+            else
+                signingConfigs.getByName("debug")
         }
     }
 

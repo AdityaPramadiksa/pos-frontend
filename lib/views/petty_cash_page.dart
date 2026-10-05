@@ -4,7 +4,8 @@ import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
-import '../services/api_service.dart';
+import '../services/pos_service.dart';
+import '../services/sync_service.dart';
 import '../utils/formatters.dart';
 import '../utils/responsive.dart';
 import '../widgets/ui.dart';
@@ -17,7 +18,8 @@ class PettyCashPage extends StatefulWidget {
 }
 
 class _PettyCashPageState extends State<PettyCashPage> {
-  final ApiService _apiService = ApiService();
+  final PosService _pos = PosService();
+  int _syncedTick = 0;
   final TextEditingController _amountController = TextEditingController();
   final TextEditingController _descController = TextEditingController();
 
@@ -30,22 +32,29 @@ class _PettyCashPageState extends State<PettyCashPage> {
   @override
   void initState() {
     super.initState();
+    _syncedTick = SyncService().syncedTick;
+    SyncService().addListener(_onSync);
+    _fetchHistory();
+  }
+
+  void _onSync() {
+    if (SyncService().syncedTick == _syncedTick) return;
+    _syncedTick = SyncService().syncedTick;
     _fetchHistory();
   }
 
   @override
   void dispose() {
+    SyncService().removeListener(_onSync);
     _amountController.dispose();
     _descController.dispose();
     super.dispose();
   }
 
   Future<void> _fetchHistory() async {
-    final res = await _apiService.getExpenses();
+    final res = await _pos.expenses();
     if (!mounted) return;
-    if (res['status'] == 'success') {
-      setState(() => _historyExpenses = res['data'] ?? []);
-    }
+    setState(() => _historyExpenses = res.items);
   }
 
   Future<void> _pickImage(ImageSource source) async {
@@ -66,10 +75,10 @@ class _PettyCashPageState extends State<PettyCashPage> {
     }
 
     setState(() => _isLoading = true);
-    final res = await _apiService.addExpense(
+    final res = await _pos.addExpense(
       amount: amount,
       description: _descController.text.trim(),
-      imageFile: _imageFile,
+      photo: _imageFile,
     );
     if (!mounted) return;
     setState(() => _isLoading = false);
@@ -79,7 +88,11 @@ class _PettyCashPageState extends State<PettyCashPage> {
       _descController.clear();
       setState(() => _imageFile = null);
       FocusScope.of(context).unfocus();
-      showMessage(context, "Pengeluaran ${rupiah(amount)} dicatat.",
+      showMessage(
+          context,
+          res['queued'] == true
+              ? "Pengeluaran ${rupiah(amount)} dicatat di perangkat, dikirim saat online."
+              : "Pengeluaran ${rupiah(amount)} dicatat.",
           success: true);
       _fetchHistory();
     } else {
@@ -240,6 +253,7 @@ class _PettyCashPageState extends State<PettyCashPage> {
                                   : DateFormat('HH:mm').format(t);
                             }(),
                             if (item['receipt_image'] != null) 'ada foto nota',
+                            if (PosService.isUnsynced(item)) 'belum terkirim',
                           ].where((s) => s.isNotEmpty).join(' · '),
                           style: TextStyle(
                               color: theme.secondaryTextColor, fontSize: 12),
