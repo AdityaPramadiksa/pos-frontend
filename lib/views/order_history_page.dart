@@ -5,6 +5,7 @@ import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
 import '../services/printer_service.dart';
 import '../utils/formatters.dart';
+import '../utils/responsive.dart';
 
 class OrderHistoryPage extends StatefulWidget {
   const OrderHistoryPage({super.key});
@@ -46,15 +47,17 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
   Widget build(BuildContext context) {
     final theme = Provider.of<ThemeProvider>(context);
 
+    final bool mobile = isMobile(context);
+
     return Scaffold(
       backgroundColor: theme.backgroundColor,
       body: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: EdgeInsets.all(mobile ? 16 : 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildHeader(theme),
-            const SizedBox(height: 24),
+            SizedBox(height: mobile ? 16 : 24),
             Expanded(
               child: _isLoading
                   ? Center(
@@ -64,7 +67,9 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
                     )
                   : _orders.isEmpty
                       ? _buildEmptyState(theme)
-                      : _buildOrderTable(theme),
+                      : mobile
+                          ? _buildOrderList(theme)
+                          : _buildOrderTable(theme),
             ),
           ],
         ),
@@ -72,27 +77,141 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
     );
   }
 
+  // --- VERSI HP: daftar kartu, tap untuk detail ---
+  Widget _buildOrderList(ThemeProvider theme) {
+    return RefreshIndicator(
+      onRefresh: _fetchHistory,
+      color: theme.primaryColor,
+      child: ListView.separated(
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: _orders.length,
+        separatorBuilder: (_, __) => const SizedBox(height: 10),
+        itemBuilder: (context, index) {
+          final order = _orders[index];
+          final bool isVoid =
+              order['status'].toString().toLowerCase() == 'void';
+          final String platform = order['delivery_platform']?.toString() ?? "";
+          final String payment =
+              order['payment_method']?.toString().toUpperCase() ?? "BELUM BAYAR";
+          final DateTime? time =
+              DateTime.tryParse(order['created_at']?.toString() ?? '')
+                  ?.toLocal();
+
+          return Material(
+            color: theme.cardColor,
+            borderRadius: BorderRadius.circular(14),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => _showOrderDetails(order, theme),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: theme.borderColor),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            order['receipt_number'] ?? '-',
+                            style: _cellStyle(isVoid, theme.textColor,
+                                bold: true, size: 13),
+                          ),
+                        ),
+                        _buildStatusBadge(order['status'].toString()),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      "${time == null ? '' : DateFormat('HH:mm').format(time)}  •  ${order['customer_name'] ?? '-'}",
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                          color: theme.secondaryTextColor, fontSize: 12),
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Text(
+                                order['order_type']
+                                    .toString()
+                                    .replaceAll('_', ' ')
+                                    .toUpperCase(),
+                                style: _cellStyle(
+                                    isVoid, theme.secondaryTextColor,
+                                    size: 11),
+                              ),
+                              if (platform.isNotEmpty)
+                                _buildPlatformBadge(platform),
+                              Text(
+                                payment,
+                                style: _cellStyle(isVoid, theme.primaryColor,
+                                    size: 11, bold: true),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          rupiah(order['total_price']),
+                          style: _cellStyle(isVoid, theme.textColor,
+                              bold: true, size: 16),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _buildHeader(ThemeProvider theme) {
+    final bool mobile = isMobile(context);
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              "Order History",
-              style: TextStyle(
-                color: theme.textColor,
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Order History",
+                style: TextStyle(
+                  color: theme.textColor,
+                  fontSize: mobile ? 22 : 28,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-            ),
-            Text(
-              "Daftar transaksi hari ini (${DateFormat('dd MMM yyyy').format(DateTime.now())})",
-              style: TextStyle(color: theme.secondaryTextColor),
-            ),
-          ],
+              Text(
+                mobile
+                    ? "Transaksi hari ini • ${_orders.length} order"
+                    : "Daftar transaksi hari ini (${DateFormat('dd MMM yyyy').format(DateTime.now())})",
+                style: TextStyle(
+                    color: theme.secondaryTextColor,
+                    fontSize: mobile ? 13 : 14),
+              ),
+            ],
+          ),
         ),
+        if (mobile)
+          IconButton(
+            tooltip: "Refresh",
+            onPressed: _fetchHistory,
+            icon: Icon(Icons.refresh, color: theme.textColor),
+          )
+        else
         ElevatedButton.icon(
           onPressed: _fetchHistory,
           icon: const Icon(Icons.refresh, size: 20),
@@ -328,6 +447,12 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: theme.cardColor,
+        insetPadding: isMobile(context)
+            ? const EdgeInsets.symmetric(horizontal: 12, vertical: 24)
+            : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+        contentPadding: isMobile(context)
+            ? const EdgeInsets.fromLTRB(16, 12, 16, 8)
+            : null,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
         title: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -352,8 +477,10 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                // Wrap: di HP info otomatis turun ke baris berikutnya
+                Wrap(
+                  spacing: 28,
+                  runSpacing: 14,
                   children: [
                     _infoBlock(
                         "KASIR", order['user']?['name'] ?? "N/A", theme),
@@ -363,15 +490,9 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
                       theme,
                     ),
                     _infoBlock("PEMBAYARAN", payment, theme),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
                     _infoBlock(
                       "TIPE",
-                      order['order_type'].toString().toUpperCase(),
+                      order['order_type'].toString().replaceAll('_', ' ').toUpperCase(),
                       theme,
                     ),
                     if (platform.isNotEmpty)
@@ -538,6 +659,8 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
                 style: TextStyle(color: theme.primaryColor),
               ),
             ),
+          // Di HP sudah ada tombol X di judul; hemat tempat
+          if (!isMobile(context))
           ElevatedButton.icon(
             onPressed: () => Navigator.pop(context),
             icon: const Icon(Icons.check),
@@ -596,10 +719,13 @@ class _OrderHistoryPageState extends State<OrderHistoryPage> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(
-            label,
-            style: TextStyle(color: theme.secondaryTextColor, fontSize: 12),
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(color: theme.secondaryTextColor, fontSize: 12),
+            ),
           ),
+          const SizedBox(width: 8),
           Text(
             value,
             style: TextStyle(color: color ?? theme.textColor, fontSize: 12),

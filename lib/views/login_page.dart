@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../utils/responsive.dart';
 import 'main_layout.dart';
 
 class LoginPage extends StatefulWidget {
@@ -106,7 +107,8 @@ class _LoginPageState extends State<LoginPage> {
         child: SingleChildScrollView(
           child: Container(
             width: 400,
-            padding: const EdgeInsets.all(40),
+            margin: const EdgeInsets.all(16),
+            padding: EdgeInsets.all(isMobile(context) ? 24 : 40),
             decoration: BoxDecoration(
               color: const Color(0xFF2D303E),
               borderRadius: BorderRadius.circular(24),

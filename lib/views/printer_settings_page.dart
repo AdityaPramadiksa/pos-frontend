@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:print_bluetooth_thermal/print_bluetooth_thermal.dart';
 import '../providers/theme_provider.dart';
 import '../services/printer_service.dart';
+import '../utils/responsive.dart';
 
 class PrinterSettingsPage extends StatefulWidget {
   const PrinterSettingsPage({super.key});
@@ -170,7 +171,7 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
         ],
       ),
       body: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: EdgeInsets.all(isMobile(context) ? 16 : 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -208,9 +209,11 @@ class _PrinterSettingsPageState extends State<PrinterSettingsPage> {
                       child: _isProcessing
                           ? const CircularProgressIndicator(color: Colors.white)
                           : Text(
-                              _connected
-                                  ? "PUTUSKAN KONEKSI"
-                                  : "HUBUNGKAN PRINTER",
+                              isMobile(context)
+                                  ? (_connected ? "PUTUSKAN" : "HUBUNGKAN")
+                                  : (_connected
+                                      ? "PUTUSKAN KONEKSI"
+                                      : "HUBUNGKAN PRINTER"),
                               style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white),

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../providers/theme_provider.dart';
 import '../services/api_service.dart';
 import '../utils/formatters.dart';
+import '../utils/responsive.dart';
 
 class PettyCashPage extends StatefulWidget {
   const PettyCashPage({super.key});
@@ -74,7 +75,7 @@ class _PettyCashPageState extends State<PettyCashPage> {
           ),
           backgroundColor: theme.cardColor,
           child: Padding(
-            padding: const EdgeInsets.all(24.0),
+            padding: EdgeInsets.all(isMobile(context) ? 16 : 24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -195,7 +196,7 @@ class _PettyCashPageState extends State<PettyCashPage> {
         ),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
+        padding: EdgeInsets.all(isMobile(context) ? 16 : 24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
